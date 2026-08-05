@@ -4,8 +4,9 @@ This doc covers `cockpit/` — the Next.js 14 App Router app that observes and c
 engine. It assumes you've read [README.md](README.md) and [01-architecture.md](01-architecture.md):
 agents propose, deterministic code disposes; the seam is the shared sqlite file
 `engine/adws/adw_data/sssf.db`; the cockpit never spawns a process to run an ADW; the read path
-is readonly by construction; the two write surfaces are `run_queue` (via `lib/control.ts`) and
-the roster config file (via `lib/roster.ts`). This doc is the mechanics of that half: routes,
+is readonly by construction; the write surfaces are `run_queue` (via `lib/control.ts`), the
+roster config file (via `lib/roster.ts`), and the `sessions.archived` review flag (via
+`lib/review.ts`). This doc is the mechanics of that half: routes,
 the `lib/` layer, the live paths, the design system, and the client/server boundary rules that
 keep it that way.
 
@@ -19,13 +20,24 @@ only automated gates (see [AGENTS.md](../AGENTS.md)).
 
 | Route | File | Purpose | Reads | Writes |
 |---|---|---|---|---|
-| `/` | `app/page.tsx` | Runs list ("Factory floor") — every ADW session newest-first, stat tiles, phase progress dots per row, tokens/cost/elapsed. `force-dynamic`. | `getDb().sessions()` | none |
+| `/` | `app/page.tsx` | Runs list ("Factory floor") — every ADW session newest-first, stat tiles, phase progress dots per row, tokens/cost/elapsed, hover-× to archive a row. `force-dynamic`. | `getDb().sessions()` | archive via POST `/api/runs/[adwId]/archive` |
 | `/agents` | `app/agents/page.tsx` | Roster view + editor. Reads `sssf.config.yaml` via `readRoster()`, enriches each agent with `getDb().agentTelemetry()`, surfaces `rosterWarnings()`. Renders `<RosterEditor>`. `force-dynamic`. | roster YAML (file) + `agent_sessions` table | via child component, POST/PUT/DELETE `/api/roster` |
 | `/cost` | `app/cost/page.tsx` | Cross-run spend dashboard — grand totals + per-model breakdown with share bars. `force-dynamic`. | `getDb().costRollup()` | none |
 | `/gates` | `app/gates/page.tsx` | Cross-run gate health — pass/fail/retry per gate type + recent failures list. `force-dynamic`. | `getDb().gateRollup()` | none |
 | `/queue` | `app/queue/page.tsx` | Control-plane Kanban board — 6 lanes (queued/claimed/running/done/failed/canceled), `<QueueLauncher>` at top, `<CancelButton>` per active card. Live via `<LiveRefresh watch="queue">`. `force-dynamic`. | `getDb().queue()` + `readRecipes()` (disk) | via child components, POST `/api/queue`, POST `/api/queue/[id]/cancel` |
-| `/runs/[adwId]` | `app/runs/[adwId]/page.tsx` | Run detail — header, stat tiles, `<ProcessMap>`, agents list, `<ModelStack>`, `<EnvelopePanel>`, `<GatePanel>`, `<LiveTail>`. `notFound()` if the session doesn't exist. `force-dynamic`. | `getDb().sessionDetail/events/envelopes/gates/runModelStack()` | none |
+| `/runs/[adwId]` | `app/runs/[adwId]/page.tsx` | Run detail — header (+ archive), stat tiles, `<Waterfall>` (proportional phase timeline; clicking a block sets `?phase=` and opens `<PhaseDetail>`: agent config, compiled prompts off disk, per-component cost, phase-scoped gates/outputs/events), agents list, `<ModelStack>`, `<LiveTail>`. With no phase selected, shows the run-wide `<EnvelopePanel>`/`<GatePanel>` instead. `notFound()` if the session doesn't exist. `force-dynamic`. | `getDb().sessionDetail/events/envelopes/gates/runModelStack()` + prompt files (disk, via `lib/prompts.ts`) | archive via POST `/api/runs/[adwId]/archive` |
 | `/skills` | `app/skills/page.tsx` | Read-only cookbook — one card per `engine/adws/adw_*.py` recipe, plus `<RecipeBuilder>` composer. `force-dynamic`. | `readRecipes()` (parses `.py` docstrings from disk, not db) | via child component, GET/POST `/api/adws` |
+
+> **Note — the waterfall's multi-agent (multi-lane) path is untested against a real trace.**
+> `<Waterfall>` groups phases into one lane per role: `engineer`, `code`, and one per distinct
+> `phases.owner`. A single-agent run (engineer + one agent) draws two lanes; a full
+> `adw_simple_sdlc` (plan → build → test → review) draws several stacked agent lanes. The layout
+> code — lane grouping, the reserved request-zone, and the sequential-shift-then-normalize block
+> packing — handles N lanes generically, **but every run in the local `sssf.db` to date is
+> engineer + a single agent**, so the multi-lane case has been exercised only through the geometry,
+> not eyeballed against a real multi-agent run. When you next kick a multi-agent ADW, sanity-check
+> the run-detail waterfall: lane order, no block overlap, and that each agent's model/context
+> label lines up with its lane.
 
 ### API routes (`app/api/**/route.ts`)
 
@@ -38,6 +50,7 @@ only automated gates (see [AGENTS.md](../AGENTS.md)).
 | `/api/roster` | GET, POST, PUT, DELETE | Config seam HTTP face. GET returns roster+warnings; POST patches allowlisted fields; PUT adds an agent + bootstraps its prompt files; DELETE removes one. | `sssf.config.yaml` | `sssf.config.yaml` (atomic temp+rename), + new `system.md`/`user.md` on PUT |
 | `/api/runs/[adwId]/events` | GET | Non-streaming rowid-cursor poll: `?after=<rowid>&limit=` → `{events, cursor, has_more, status}`. Retained for parity with the engine's own visualizer; superseded by the SSE route for the live tail. | `db.events()` + `db.session()` | none |
 | `/api/runs/[adwId]/stream` | GET | Per-run SSE live tail. Resumes from `Last-Event-ID` or `?after=`. Closes when `status !== 'running'`. Node runtime. | `db.events()` + `db.session()` | none |
+| `/api/runs/[adwId]/archive` | POST | Review seam HTTP face — sets (or clears, `{archived:false}`) `sessions.archived` via `lib/review.ts`. Never spawns anything, never touches a run's trace. | — | UPDATE `sessions.archived` via `getReview().setArchived()` |
 
 Every page catches its own load error and renders an inline error box rather than crashing — the
 shell (Sidebar/Topbar/CommandPalette) never depends on the db, so a missing `sssf.db` only 500s
@@ -93,6 +106,14 @@ Any change to a table in `tracer.py` must be mirrored in both files — see the 
   `addAgent()` bootstraps the new agent's two prompt files only after the YAML validates.
   `rosterWarnings()` surfaces advisory smells (e.g. `coding_agent: pi` routing an `anthropic/*`
   model) without hard-blocking. Full schema and semantics: [05-config-and-roster.md](05-config-and-roster.md).
+- `lib/review.ts` — `AtelierReview`, server-only, the third write surface: a separate read-write
+  `better-sqlite3` connection that writes exactly one column, `sessions.archived`, which the engine
+  schema reserves for the UI ("review triage, set by the UI; never by a run"). Archiving is *reader*
+  state — it drops a triaged run out of the review list (the read path already filters
+  `archived = 0`) — so it's isolated from both the readonly reader and `control.ts` (which stays
+  `run_queue`-only), and it never touches a run's trace or acceptance. `getReview()` memoizes a
+  singleton like `getDb()`/`getControl()`; `canArchive` is false on a pre-migration db so the
+  writer fails loudly rather than silently no-op'ing.
 
 ### Client-safe helpers
 
@@ -104,8 +125,11 @@ Any change to a table in `tracer.py` must be mirrored in both files — see the 
   directly off disk, no db access, no Python import.
 - `lib/dashboard-signature.ts` — pure, FNV-1a `hash()` plus `queueSig()`/`runsSig()` — the
   structural-signature functions shared by the SSE route and the pages that seed it.
-- `lib/format.ts` — pure display helpers (`compact`, `usd`, `duration`, `ago`); durations/relative
-  times are always derived at render time, never stored.
+- `lib/format.ts` — pure display helpers (`compact`, `usd`, `usd4`, `duration`, `ago`, plus the
+  waterfall's time-axis primitives `tsMs`, `fmtOffset`, `axisTicks`); durations/relative times are
+  always derived at render time, never stored.
+- `lib/model.ts` — pure `modelIdentity()` (a model id → provider bucket + short name), behind the
+  monochrome provider tile in `ModelBadge`. Node-free, client-safe.
 - `lib/adw-builder.ts` — see below.
 - `lib/palette.ts` — `filterCommands()` for the command palette's fuzzy search.
 - `lib/theme.ts` — `THEMES`, `THEME_INIT_SCRIPT` (pre-paint theme script), storage key.
@@ -117,8 +141,9 @@ Any change to a table in `tracer.py` must be mirrored in both files — see the 
 
 | Module | Server-only | Client-safe |
 |---|---|---|
-| `db.ts`, `data.ts`, `control.ts`, `skills.ts`, `adw-builder.ts` | ✅ (`node:fs`, `better-sqlite3`, `node:child_process`) | |
-| `roster.ts` | ✅ (`node:fs`, `node:crypto`, `yaml`) | |
+| `db.ts`, `data.ts`, `control.ts`, `review.ts`, `skills.ts`, `adw-builder.ts` | ✅ (`node:fs`, `better-sqlite3`, `node:child_process`) | |
+| `roster.ts`, `prompts.ts` | ✅ (`node:fs`, `node:crypto`, `yaml`) | |
+| `model.ts` | | ✅ (pure regex; no node imports) |
 | `roster-constants.ts` | | ✅ (only its *types* are imported from `roster.ts`) |
 | `schemas.ts`, `types.ts` | | ✅ (Zod + plain types; no node imports) |
 | `nav.ts`, `adws.ts`, `dashboard-signature.ts`, `format.ts`, `palette.ts`, `theme.ts` | | ✅ |
@@ -151,8 +176,9 @@ once `status !== null && status !== 'running'` — a terminal run ends the tail.
 Client (`LiveTail`): only opens an `EventSource` while `status === 'running'`. Prepends new
 events to local state (capped at 300 rows). If any event's `type` is structural
 (`phase_start/phase_end/agent_start/agent_end/gate_pass/gate_fail/handoff/error`), it calls
-`router.refresh()` so the server-rendered `ProcessMap`/`EnvelopePanel`/`GatePanel` re-paint; a
-status change away from `running` also triggers a final refresh. Non-structural events
+`router.refresh()` so the server-rendered `Waterfall`/`ModelStack`/`EnvelopePanel`/`GatePanel` (and
+`PhaseDetail`, when a phase is selected) re-paint; a status change away from `running` also
+triggers a final refresh. Non-structural events
 (`tool_call`, `log`) update only the local tail list.
 
 ### B. List-level SSE
