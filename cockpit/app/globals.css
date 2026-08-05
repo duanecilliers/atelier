@@ -1,0 +1,206 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Monolith Signal — Atelier's design language, lifted from FounderOS.
+   White/grey structure on bare black; boxes flattened; zero glow/grid; a strict
+   traffic-light rule — color ONLY ever means status (green good · yellow
+   degraded/running · red bad). os.* Tailwind classes read these CSS vars, so one
+   data-theme flip on <html> re-skins everything. Three skins kept: mono (default
+   identity), mono-light (daylight), dark (phosphor terminal). Funnel/brain/
+   conductor viz tokens from the source are dropped — Atelier has no such views.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Theme-independent motion constant — must live on a bare :root so it survives
+   every skin. */
+:root {
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* Mono (Monolith Signal) — the default identity; bare :root rides along so a
+   no-JS / pre-hydration load already renders Monolith. */
+:root,
+:root[data-theme='mono'] {
+  color-scheme: dark;
+  --bg: #0a0a0a;
+  --bg-2: #0a0a0a;
+  --surface: #0a0a0a; /* boxes are gone — surfaces flatten to bg */
+  --surface-2: #141414; /* hover fill (nav rows, list rows) */
+  --surface-3: #1c1c1c;
+  --border: #242424; /* structural rules */
+  --border-strong: #3a3a3a; /* hover brighten, kbd, chip borders */
+  --hairline: #1c1c1c; /* row dividers inside lists/tables */
+  --text: #f2f2f2;
+  --text-2: #9c9c9c;
+  --text-3: #5c5c5c;
+  /* Accent IS white — active nav, primary badges, inverted fills. */
+  --accent: #f2f2f2;
+  --accent-2: #d4d4d4;
+  --accent-ink: #0a0a0a;
+  --accent-soft: rgba(242, 242, 242, 0.06);
+  --accent-line: rgba(242, 242, 242, 0.25);
+  /* The only three colors in the system. */
+  --ok: #2fd36f;
+  --warn: #ffb000;
+  --err: #ff2d3f;
+}
+
+/* Daylight — calm light skin: white cards on a soft grey canvas. */
+:root[data-theme='mono-light'] {
+  color-scheme: light;
+  --bg: #f5f6f8;
+  --bg-2: #eef0f3;
+  --surface: #ffffff;
+  --surface-2: #eceef1;
+  --surface-3: #e2e5ea;
+  --border: #d6dae0;
+  --border-strong: #bcc2ca;
+  --hairline: #e7e9ed;
+  --text: #1b1e23;
+  --text-2: #4c525b;
+  --text-3: #737a84;
+  --accent: #1b1e23;
+  --accent-2: #363b42;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(27, 30, 35, 0.06);
+  --accent-line: rgba(27, 30, 35, 0.16);
+  --ok: #17924e;
+  --warn: #b7791f;
+  --err: #d92d20;
+}
+
+/* Dark — phosphor-green command deck. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #050807;
+  --bg-2: #070b09;
+  --surface: #0a0f0c;
+  --surface-2: #0f1511;
+  --surface-3: #141c17;
+  --border: #18211b;
+  --border-strong: #243029;
+  --hairline: #141b16;
+  --text: #e4efe6;
+  --text-2: #8fa295;
+  --text-3: #54665b;
+  --accent: #3df08c;
+  --accent-2: #35d97e;
+  --accent-ink: #03140a;
+  --accent-soft: rgba(61, 240, 140, 0.08);
+  --accent-line: rgba(61, 240, 140, 0.25);
+  --ok: #3df08c;
+  --warn: #ffc53d;
+  --err: #ff6259;
+}
+
+body {
+  @apply bg-os-bg font-sans text-os-text antialiased;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 0;
+  border: 3px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
+}
+
+/* Terminal cards answer the mouse with a border brighten only — no lift. */
+.hoverable {
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease;
+}
+.hoverable:hover {
+  border-color: var(--border-strong);
+}
+.hoverable:active {
+  transition-duration: 0.06s;
+}
+
+/* ---------------- status dots (LED squares) ---------------- */
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 0;
+  flex-shrink: 0;
+  position: relative;
+  display: inline-block;
+}
+.dot.ok {
+  background: var(--ok);
+}
+/* Pulse ring replaced by an LED blink — steps(), not ease. */
+.dot.ok.pulse {
+  animation: led-blink 2.6s steps(1) infinite;
+}
+.dot.warn {
+  background: var(--warn);
+}
+.dot.err {
+  background: var(--err);
+}
+.dot.off {
+  background: transparent;
+  border: 1px solid var(--text-3);
+}
+@keyframes led-blink {
+  0%, 70%, 100% { opacity: 1; }
+  85% { opacity: 0.25; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dot.ok.pulse {
+    animation: none;
+  }
+}
+
+/* ---------------- terminal page furniture ---------------- */
+.page-eyebrow::before {
+  content: '//';
+  font-weight: 700;
+}
+.caret-blink::after {
+  content: '▌';
+  margin-left: 4px;
+  animation: blink 1.1s steps(1) infinite;
+  color: var(--accent);
+}
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .caret-blink::after {
+    animation: none;
+  }
+}
+
+/* View entrance — transform-only so content is never hidden if throttled. */
+.view {
+  animation: view-in 0.24s var(--ease);
+}
+@keyframes view-in {
+  from {
+    transform: translateY(8px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .view {
+    animation: none;
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "name": "atelier-cockpit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Atelier cockpit — operator console over the SSSF engine's sssf.db",
+  "scripts": {
+    "dev": "next dev -H 127.0.0.1 -p 4200",
+    "build": "next build",
+    "start": "next start -p 4200",
+    "typecheck": "tsc --noEmit",
+    "check:contract": "tsx scripts/check-contract.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "lucide-react": "^0.441.0",
+    "next": "^14.2.13",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.5.5",
+    "@types/react": "^18.3.8",
+    "@types/react-dom": "^18.3.0",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.12",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["better-sqlite3"]
+  }
+}
