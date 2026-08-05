@@ -1,0 +1,345 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atelier — Field Guide: Using the Factory on Real Projects</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<style>
+  :root{
+    --bg:#0a0a0a; --bg2:#0e0e0e; --surface:#111214; --surface2:#161719; --surface3:#1b1c1f;
+    --border:#1c1c1c; --border-strong:#2a2a2a; --hairline:#171717;
+    --text:#f2f2f2; --text2:#a0a0a0; --text3:#6a6a6a;
+    --accent:#f2f2f2;
+    --ok:#2fd36f; --warn:#ffb000; --err:#ff2d3f;
+    --ok-soft:color-mix(in oklab,var(--ok) 12%,transparent);
+    --warn-soft:color-mix(in oklab,var(--warn) 12%,transparent);
+    --err-soft:color-mix(in oklab,var(--err) 12%,transparent);
+    --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  *,*::before,*::after{box-sizing:border-box;}
+  :where(.grid,.flex)>*{min-width:0;}
+  :where(p,h1,h2,h3,h4,li,td,th,.badge){overflow-wrap:anywhere;}
+  html{background:var(--bg);}
+  body{
+    margin:0;font-family:var(--mono);color:var(--text);background:var(--bg);
+    font-size:13px;line-height:1.55;-webkit-font-smoothing:antialiased;letter-spacing:-0.01em;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:56px 28px 120px;}
+
+  .eyebrow{font-size:9.5px;font-weight:700;letter-spacing:0.32em;text-transform:uppercase;color:var(--text3);margin:0 0 10px;}
+  .eyebrow::before{content:"// ";color:var(--text3);}
+  h1{font-size:32px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;margin:0 0 4px;line-height:1.1;}
+  h1 .caret{display:inline-block;width:12px;height:25px;background:var(--err);margin-left:8px;transform:translateY(4px);animation:blink 1.1s steps(1) infinite;}
+  @keyframes blink{50%{opacity:0;}}
+  .subttl{font-size:10.5px;letter-spacing:0.24em;text-transform:uppercase;color:var(--text3);margin:0 0 18px;}
+  .lede{font-size:14.5px;color:var(--text2);max-width:80ch;margin:0 0 8px;line-height:1.6;}
+  .lede b{color:var(--text);font-weight:600;}
+
+  h2{font-size:10px;font-weight:700;letter-spacing:0.26em;text-transform:uppercase;color:var(--text2);
+     display:flex;align-items:center;gap:14px;margin:0 0 20px;}
+  h2 .n{color:var(--err);font-weight:700;}
+  h2::after{content:"";flex:1;height:1px;background:var(--border);}
+  section{margin-top:56px;}
+  h3{font-size:13px;font-weight:700;letter-spacing:0.01em;margin:0 0 8px;color:var(--text);text-transform:none;}
+  p{margin:0 0 12px;color:var(--text2);}
+  p b, li b{color:var(--text);font-weight:600;}
+  a{color:var(--text);text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--border-strong);}
+  code{font-family:var(--mono);font-size:11.5px;background:var(--surface2);border:1px solid var(--border);padding:1px 5px;color:#d6d6d6;white-space:nowrap;}
+  pre{background:var(--surface2);border:1px solid var(--border);padding:12px 14px;overflow-x:auto;margin:10px 0;font-size:11.5px;line-height:1.55;color:#d6d6d6;}
+  pre code{background:none;border:none;padding:0;white-space:pre;}
+  .cmt{color:var(--text3);}
+  .tok-ok{color:var(--ok);} .tok-warn{color:var(--warn);} .tok-err{color:var(--err);}
+
+  .card{border:1px solid var(--border);background:var(--surface);padding:18px 18px 16px;transition:border-color .15s;}
+  .card:hover{border-color:var(--border-strong);}
+  .grid{display:grid;gap:14px;}
+  .g2{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .g3{grid-template-columns:repeat(3,minmax(0,1fr));}
+  @media(max-width:760px){.g2,.g3{grid-template-columns:minmax(0,1fr);}}
+
+  .kicker{font-size:9px;font-weight:700;letter-spacing:0.22em;text-transform:uppercase;color:var(--text3);margin:0 0 10px;display:flex;gap:8px;align-items:center;}
+  .dot{width:6px;height:6px;flex:0 0 auto;display:inline-block;}
+  .dot.ok{background:var(--ok);} .dot.warn{background:var(--warn);} .dot.err{background:var(--err);} .dot.off{background:var(--text3);}
+
+  ul.tight{margin:8px 0 0;padding:0;list-style:none;}
+  ul.tight li{position:relative;padding:5px 0 5px 18px;color:var(--text2);border-top:1px solid var(--hairline);font-size:12.5px;}
+  ul.tight li:first-child{border-top:none;}
+  ul.tight li::before{content:"›";position:absolute;left:2px;top:5px;color:var(--text3);}
+
+  ol.steps{margin:8px 0 0;padding:0 0 0 0;list-style:none;counter-reset:s;}
+  ol.steps li{position:relative;padding:9px 0 9px 34px;border-top:1px solid var(--hairline);color:var(--text2);font-size:12.5px;counter-increment:s;}
+  ol.steps li:first-child{border-top:none;}
+  ol.steps li::before{content:counter(s,decimal-leading-zero);position:absolute;left:0;top:9px;color:var(--err);font-weight:700;font-size:10px;letter-spacing:0.06em;}
+
+  .badge{display:inline-flex;align-items:center;gap:5px;font-size:9px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;
+         border:1px solid var(--border-strong);padding:3px 7px;color:var(--text2);white-space:nowrap;}
+  .badge.green{color:var(--ok);border-color:color-mix(in oklab,var(--ok) 40%,var(--border));background:var(--ok-soft);}
+  .badge.red{color:var(--err);border-color:color-mix(in oklab,var(--err) 40%,var(--border));background:var(--err-soft);}
+  .badge.amber{color:var(--warn);border-color:color-mix(in oklab,var(--warn) 40%,var(--border));background:var(--warn-soft);}
+
+  .tbl-wrap{overflow-x:auto;border:1px solid var(--border);background:var(--surface);}
+  table{border-collapse:collapse;width:100%;font-size:12px;min-width:640px;}
+  th{font-size:9px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;color:var(--text3);text-align:left;
+     padding:11px 14px;border-bottom:1px solid var(--border);background:var(--bg2);position:sticky;top:0;}
+  td{padding:11px 14px;border-top:1px solid var(--hairline);color:var(--text2);vertical-align:top;}
+  tr:hover td{background:var(--surface2);}
+  td.k{color:var(--text);font-weight:600;white-space:nowrap;}
+
+  .callout{border:1px solid color-mix(in oklab,var(--ok) 34%,var(--border));background:linear-gradient(180deg,var(--ok-soft),transparent);padding:16px 18px;}
+  .callout h3{color:var(--ok);}
+  .callout.warn{border-color:color-mix(in oklab,var(--warn) 34%,var(--border));background:linear-gradient(180deg,var(--warn-soft),transparent);}
+  .callout.warn h3{color:var(--warn);}
+  .callout.err{border-color:color-mix(in oklab,var(--err) 34%,var(--border));background:linear-gradient(180deg,var(--err-soft),transparent);}
+  .callout.err h3{color:var(--err);}
+
+  .caption{font-size:11px;color:var(--text3);margin-top:8px;}
+  .zone td.sev{white-space:nowrap;font-weight:700;font-size:10px;letter-spacing:0.06em;}
+  .sev.hi{color:var(--err);} .sev.med{color:var(--warn);} .sev.lo{color:var(--ok);}
+
+  .phase{border:1px solid var(--border);background:var(--surface);margin-bottom:12px;}
+  .phase-head{display:flex;gap:12px;align-items:baseline;padding:13px 18px;border-bottom:1px solid var(--hairline);flex-wrap:wrap;}
+  .phase-tag{font-size:9px;font-weight:700;letter-spacing:0.14em;color:var(--bg);background:var(--text);padding:3px 8px;text-transform:uppercase;white-space:nowrap;}
+  .phase-title{font-size:13.5px;font-weight:700;color:var(--text);}
+  .phase-sub{font-size:11px;color:var(--text3);margin-left:auto;}
+  .phase-body{padding:12px 18px;}
+
+  .foot{margin-top:60px;border-top:1px solid var(--border);padding-top:16px;font-size:10.5px;color:var(--text3);letter-spacing:0.02em;}
+  .src{display:inline-block;background:var(--surface2);border:1px solid var(--border);padding:2px 7px;color:var(--text2);}
+</style>
+
+<div class="wrap">
+
+  <p class="eyebrow">Atelier · Companion to the Build Plan · Field notes</p>
+  <h1>Using the Factory<span class="caret"></span></h1>
+  <p class="subttl">How you'd actually point Atelier at repayd &amp; tmu — before Phase 0</p>
+  <p class="lede">The <a href="atelier-plan.html">build plan</a> describes what Atelier <b>will be</b>. This doc is a reality check on what the engine <b>is today</b> and a concrete playbook for the two projects you want to try it on. Short version: <b>both repos are an unusually clean fit</b> — DDD Laravel apps whose <code>domain/</code> folders map 1:1 onto <code>tests/</code> folders, already fenced by exactly the deterministic gates SSSF wants (PHPStan, Pest, Rector, phpat boundaries). The engine barely has to bring its own guardrails; the repos ship them.</p>
+  <p class="lede" style="font-size:13px;">But you'd be running the <b>SSSF engine as it exists now</b> — not the finished cockpit. Three facts change how you'd use it, and they're in §01.</p>
+
+  <!-- 01 REALITY CHECK -->
+  <section>
+    <h2><span class="n">01</span> Reality check — what v1 gives you today</h2>
+    <p>Before scoping tasks, internalise where the engine actually is. These aren't blockers — they're the shape of the tool you'd be holding.</p>
+    <div class="grid g3">
+      <div class="callout warn">
+        <h3>Pi only. CC is stubbed.</h3>
+        <p style="font-size:11.5px;margin:0;color:var(--text2)"><code>agent_cc.py</code> raises <code>NotImplementedError</code>. The roster runs entirely through the <b>Pi</b> backend, and <code>validate()</code> rejects any agent set to <code>claude_code</code> before it spawns. The plan's "Opus/Fable via Agent SDK" split is <b>Phase-2+ work</b>. Today: pick Pi-reachable models for every phase.</p>
+      </div>
+      <div class="callout warn">
+        <h3>Commits straight to your branch.</h3>
+        <p style="font-size:11.5px;margin:0;color:var(--text2)">No branch-per-run, no sandbox, no PR, no human-approval phase. A chain that ends in a <code>commit</code> phase does <code>git add -A &amp;&amp; git commit</code> on <b>whatever branch you're on</b>. On money-touching repos that's a footgun — you'll add a branch-per-run wrapper (§02).</p>
+      </div>
+      <div class="callout warn">
+        <h3>The test gate is a placebo.</h3>
+        <p style="font-size:11.5px;margin:0;color:var(--text2)"><code>quality.py</code> ships commands that <code>echo</code> and exit 0. Out of the box <code>adw_build_test</code> reports <b>green on a repo with zero real tests run</b>. Wiring your actual verify commands into that one file is the first thing you customise — and it's what makes Atelier trustworthy on these repos.</p>
+      </div>
+    </div>
+    <p class="caption">Net: v1 is <b>observe-first and Pi-driven</b>, exactly as D4 locks it. You run ADWs from the CLI, watch them in the read-only cockpit, and the "launch from UI" / model-stack story arrives in later phases. Plan your first month around that.</p>
+  </section>
+
+  <!-- 02 ADOPTION PATTERN -->
+  <section>
+    <h2><span class="n">02</span> The onboarding pattern — same six moves for any repo</h2>
+    <p>SSSF installs <i>into</i> a target repo: it stamps an <code>adws/</code> tree and operates on the git root of the current working directory. There's no "target repo" flag — you <code>cd</code> into the project and run there. So onboarding repayd or tmu is the same recipe:</p>
+    <ol class="steps">
+      <li><b>Stamp the factory.</b> Copy the <code>sssf</code> skill into the repo's <code>.claude/skills/</code>, then <code>uv run .claude/skills/sssf/scripts/install.py</code> from the repo root. This lands <code>adws/</code>, a starter <code>sssf.config.yaml</code>, prompts, and a <code>justfile</code>. Commit it as its own change so it's reviewable and reversible.</li>
+      <li><b>Wire <code>quality.py</code> to the repo's real verify commands</b> — the single most important step. Replace the echo placeholders with the actual argv (see per-project §04). This turns the deterministic test/quality gate from theatre into a real acceptance check.</li>
+      <li><b>Author the roster</b> in <code>sssf.config.yaml</code>: models per agent (all Pi for now), and — critically — a <code>writes:</code> allowlist per agent scoped to the domain folder you're targeting. The write-boundary enforcer rolls back anything outside it.</li>
+      <li><b>Add a branch-per-run wrapper.</b> Since the engine commits to the current branch, front every run with <code>git switch -c atelier/&lt;adw_id&gt;</code>. A three-line shell/just recipe closes the biggest v1 gap for these repos.</li>
+      <li><b>Set keys &amp; smoke-test.</b> <code>cp .env.sample .env</code>, add the provider key(s) your models need, then <code>just demo</code> (two cheap read-only runs) and <code>just obs</code> to confirm the trace UI sees the db.</li>
+      <li><b>Start read-only.</b> First real runs are <code>adw_scout</code> / <code>adw_plan</code> — no writes, no commits. Read the envelopes and gate evidence in the cockpit before you ever let a <code>builder</code> touch a file.</li>
+    </ol>
+    <div class="callout" style="margin-top:16px">
+      <h3>Why these two repos flatter the engine</h3>
+      <p style="font-size:12px;margin:0;color:var(--text2)">SSSF's whole thesis is "agent proposes, deterministic code disposes" — but code can only dispose if the repo <i>has</i> deterministic checks. repayd and tmu both ship: <b>PHPStan/Larastan</b> (repayd at <b>level 8</b>), <b>Pest</b> domain suites organised 1:1 with the <code>domain/</code> folders, <b>Rector</b> + <b>PHP-CS-Fixer</b>, and repayd even has <b>phpat architecture-boundary tests</b> that fail if a domain imports across its seam. Those <i>are</i> your claim gates. You're not inventing acceptance criteria — you're pointing <code>quality.py</code> at ones that already exist and are already enforced in git hooks.</p>
+    </div>
+  </section>
+
+  <!-- 03 FIT / SCOPING MODEL -->
+  <section>
+    <h2><span class="n">03</span> The scoping model — one domain folder per run</h2>
+    <p>Both repos use the same DDD layout: business logic lives in <code>domain/&lt;Module&gt;/</code>, and each module has a matching <code>tests/Domain/&lt;Module&gt;/</code>. That folder pair is your natural unit of work — small enough for one agent to hold, self-contained enough that the write boundary and the test filter line up cleanly.</p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Move</th><th>How it lands on a Laravel/DDD repo</th></tr></thead>
+        <tbody>
+          <tr><td class="k">Scope the writes allowlist</td><td><code>writes: [domain/Forex/, tests/Domain/Forex/]</code> — the agent physically cannot edit outside the module; the enforcer <code>git checkout</code>s any stray file.</td></tr>
+          <tr><td class="k">Scope the test gate</td><td>Wire the test command as <code>artisan test --filter=Forex</code> (or the folder path) so the gate runs the module's suite, fast, per attempt.</td></tr>
+          <tr><td class="k">Protect the load-bearing files</td><td><code>protected_files:</code> already blocks <code>adws/</code> itself; add <code>database/migrations/</code>, auth, and pivot tables so no agent can touch them without naming them explicitly.</td></tr>
+          <tr><td class="k">Let phpat/PHPStan be the reviewer</td><td>Architecture-boundary + level-8 static analysis catch cross-domain leakage and type errors deterministically — cheaper and stricter than an LLM reviewer for this class of bug.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 04 PER-PROJECT PLAYBOOKS -->
+  <section>
+    <h2><span class="n">04</span> Per-project playbooks</h2>
+
+    <!-- REPAYD -->
+    <div class="phase">
+      <div class="phase-head"><span class="phase-tag">repayd</span><span class="phase-title">Payments platform · Laravel 12 + Filament · PHPStan L8</span><span class="phase-sub">~36k LOC · 198 test files · high blast radius</span></div>
+      <div class="phase-body">
+        <p style="margin-top:0"><b>Character:</b> regulated fintech — card/bank transactions, payouts, chargebacks, forex, ACI gateway webhooks. Excellent test + lint coverage (your friend), but the money paths are unforgiving. This is a repo where you lean <i>hard</i> on the deterministic gates and keep agents out of the hot zones.</p>
+
+        <p class="kicker" style="margin-top:14px"><span class="dot ok"></span> Wire quality.py to</p>
+<pre><code><span class="cmt"># verify gate  → static analysis + boundaries (fast, no DB)</span>
+["composer","phpstan"]         <span class="cmt"># larastan level 8, respects phpstan-baseline.neon</span>
+<span class="cmt"># test gate    → scoped Pest suite for the module in play</span>
+["php","artisan","test","--filter=&lt;Module&gt;"]
+<span class="cmt"># pre-commit style bundle for a fuller pass</span>
+["composer","lint"]            <span class="cmt"># rector + cs-fixer + phpstan + phpmd + phpcpd</span></code></pre>
+
+        <div class="grid g2" style="margin-top:12px">
+          <div class="card">
+            <p class="kicker"><span class="dot ok"></span> Green zone — good first ADWs <span class="badge green" style="margin-left:auto">start here</span></p>
+            <ul class="tight">
+              <li><code>domain/Docs/</code> — API-doc generation, low risk</li>
+              <li><code>domain/Forex/</code> — rate fetch/convert, well-bounded</li>
+              <li><code>domain/Shared/</code> helpers, <code>domain/Users/</code> mgmt</li>
+              <li>Test back-fill on under-covered domains</li>
+              <li>Rector/CS-Fixer cleanup runs (<code>adw_quality</code>)</li>
+            </ul>
+          </div>
+          <div class="card">
+            <p class="kicker"><span class="dot err"></span> Red zone — human-only, keep agents out <span class="badge red" style="margin-left:auto">no-go</span></p>
+            <ul class="tight">
+              <li><code>Transactions/</code>, <code>Payouts/</code> — live money, actively fragile</li>
+              <li><code>Gateways/</code> — ACI webhooks, unauth public endpoints</li>
+              <li>Auth: Sanctum, spatie-permission, Breezy 2FA, tenant global scopes</li>
+              <li><code>database/migrations/</code> — highest blast radius; some repair live data</li>
+              <li>Deploy: <code>bitbucket-pipelines.yml</code>, <code>s3-*/</code>, <code>docker/</code></li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="callout err" style="margin-top:12px">
+          <h3>repayd-specific traps</h3>
+          <p style="font-size:11.5px;margin:0 0 6px;color:var(--text2)"><b>No <code>Co-Authored-By</code> trailers.</b> <code>AGENTS.md</code> explicitly forbids them — override the default commit-message shape in your builder/documenter prompts and the git commit phase.</p>
+          <p style="font-size:11.5px;margin:0 0 6px;color:var(--text2)"><b>CI does not run tests.</b> Bitbucket runs only rector/cs-fixer/phpstan/phpcpd; the Pest suite is enforced by local git hooks. So your <code>quality.py</code> test gate is the <i>only</i> automated test signal — it has to be real.</p>
+          <p style="font-size:11.5px;margin:0;color:var(--text2)"><b>Respect the baselines.</b> <code>phpstan-baseline.neon</code> / <code>phpmd.baseline.xml</code> grandfather existing debt — the gate should fail on <i>new</i> violations only, which the baseline files already handle. Don't let an agent "fix" the baseline.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- TMU -->
+    <div class="phase">
+      <div class="phase-head"><span class="phase-tag">tmu</span><span class="phase-title">Insurance admin · Laravel 11 + Filament</span><span class="phase-sub">~13k LOC · 54 test files · moderate coverage</span></div>
+      <div class="phase-body">
+        <p style="margin-top:0"><b>Character:</b> internal back-office — policies, products, distributors, claims, declarations, bulk CSV/Excel import. Smaller and lower-stakes than repayd (no payment gateway; "money" is IPT/premium/percentage math). A single agent holds a whole domain module comfortably. Good repo to <b>build your confidence</b> before letting Atelier near repayd's money paths.</p>
+
+        <p class="kicker" style="margin-top:14px"><span class="dot ok"></span> Wire quality.py to</p>
+<pre><code><span class="cmt"># verify gate</span>
+["vendor/bin/phpstan","analyse","--memory-limit=1024M"]
+<span class="cmt"># test gate  (RefreshDatabase → needs the testing DB up)</span>
+["php","artisan","test","--parallel","--filter=&lt;Module&gt;"]
+<span class="cmt"># style</span>
+["vendor/bin/php-cs-fixer","fix","--dry-run","--diff"]</code></pre>
+
+        <div class="grid g2" style="margin-top:12px">
+          <div class="card">
+            <p class="kicker"><span class="dot ok"></span> Green zone — good first ADWs <span class="badge green" style="margin-left:auto">start here</span></p>
+            <ul class="tight">
+              <li><code>Brokers/</code>, <code>Insurers/</code>, <code>Mitigations/</code>, <code>Sections/</code> — low coupling</li>
+              <li><code>Reporting/</code> — additive, read-heavy</li>
+              <li>Test coverage back-fill (only 54 test files → lots of headroom)</li>
+              <li>Fix the stale <code>CLAUDE.md</code> "Vue 3 + Inertia" line — the UI is Filament + Blade</li>
+            </ul>
+          </div>
+          <div class="card">
+            <p class="kicker"><span class="dot warn"></span> Amber / red — extra care <span class="badge amber" style="margin-left:auto">gated</span></p>
+            <ul class="tight">
+              <li><code>Policies/</code>, <code>Products/</code> — core domains, <code>distributor_percentage</code> splits ripple wide</li>
+              <li><code>Declarations/</code> — IPT rate, hosting rate, money-adjacent</li>
+              <li><code>database/migrations/</code> — <b>active int→UUID PK conversion</b>; new migrations must not break it</li>
+              <li>Auth: Filament Breezy sessions/2FA</li>
+              <li>Bulk import pipeline (<code>imports</code>, SQS jobs, S3) — failure-prone, external</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="callout warn" style="margin-top:12px">
+          <h3>tmu-specific traps</h3>
+          <p style="font-size:11.5px;margin:0 0 6px;color:var(--text2)"><b>UUID-as-PK is load-bearing.</b> Observers generate <code>Str::orderedUuid()</code>; the int→UUID migration is mid-flight. Keep agents out of <code>database/migrations/</code> and don't let them "simplify" the UUID route-key traits.</p>
+          <p style="font-size:11.5px;margin:0 0 6px;color:var(--text2)"><b>Tests use <code>RefreshDatabase</code>.</b> The test gate needs the <code>testing</code> Postgres DB reachable (Sail provisions it). If the DB isn't up, the gate fails for the wrong reason — make sure Sail is running before a build+test chain.</p>
+          <p style="font-size:11.5px;margin:0;color:var(--text2)"><b>CI doesn't run tests here either</b> — same as repayd. Your <code>quality.py</code> gate is the test signal.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 05 TASK → ADW RECIPES -->
+  <section>
+    <h2><span class="n">05</span> Task → ADW recipes</h2>
+    <p>SSSF ships 12 ADWs. Here's which to reach for, matched to work you'd actually queue on these repos. Start at the top (read-only), earn your way down.</p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>You want to…</th><th>ADW</th><th>Writes?</th><th>Notes for these repos</th></tr></thead>
+        <tbody>
+          <tr><td class="k">Understand a domain before touching it</td><td><code>adw_scout</code></td><td>No</td><td>Read-only recon. Perfect first contact with any <code>domain/&lt;Module&gt;</code>.</td></tr>
+          <tr><td class="k">Turn a Jira ticket into a plan</td><td><code>adw_plan</code></td><td>specs/ only</td><td>Review the plan envelope in the cockpit before building. Zero risk.</td></tr>
+          <tr><td class="k">Back-fill tests on a thin module</td><td><code>adw_build_test</code></td><td>module + tests</td><td>Ideal green-zone task. Gate = the Pest suite you wired. tmu especially.</td></tr>
+          <tr><td class="k">Small feature end-to-end</td><td><code>adw_plan_build_test</code></td><td>module + tests</td><td>plan → build → test → commit. Behind a branch-per-run wrapper only.</td></tr>
+          <tr><td class="k">Rector / CS-Fixer / style sweep</td><td><code>adw_quality</code></td><td>—</td><td>No agents; runs your lint bundle deterministically. Safe, high-value.</td></tr>
+          <tr><td class="k">Full lifecycle w/ review + docs</td><td><code>adw_simple_sdlc</code></td><td>module + docs</td><td>plan→build→test→review→docs, 3 commits. Save for once you trust the gates.</td></tr>
+          <tr><td class="k">Document a diff</td><td><code>adw_document</code></td><td>docs/</td><td>Reads <code>git diff</code>, writes docs. Watch the no-<code>Co-Authored-By</code> rule on repayd.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="caption">Chain them by reusing the <code>--adw-id</code>: run <code>adw_plan</code>, read it, then <code>adw_build_test --adw-id &lt;same&gt;</code> resumes the same session with the planner's context intact.</p>
+  </section>
+
+  <!-- 06 GUARDRAILS -->
+  <section>
+    <h2><span class="n">06</span> Cross-cutting guardrails &amp; gotchas</h2>
+    <div class="tbl-wrap zone">
+      <table>
+        <thead><tr><th>Gotcha</th><th>Sev</th><th>What to do</th></tr></thead>
+        <tbody>
+          <tr><td class="k">Commits land on your current branch</td><td class="sev hi">HIGH</td><td>Wrap every write-capable run in <code>git switch -c atelier/&lt;id&gt;</code> first. Never run a build/commit chain directly on <code>develop</code>/<code>master</code>/<code>staging</code>.</td></tr>
+          <tr><td class="k">quality.py placeholders report false green</td><td class="sev hi">HIGH</td><td>Wire real argv before trusting any <code>*_test</code> ADW. This is step 2 of onboarding for a reason.</td></tr>
+          <tr><td class="k">These are git worktrees w/ symlinked shared config</td><td class="sev med">MED</td><td><code>.env</code>, <code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>.claude/</code> resolve into <code>../shared/</code>. An agent editing "a config file" may hit shared state across worktrees. Add those symlink targets to <code>protected_files</code>.</td></tr>
+          <tr><td class="k">CI never runs the test suite (both repos)</td><td class="sev med">MED</td><td>Your <code>quality.py</code> test gate is the sole automated test signal. Treat a passing gate as the acceptance bar, and still open a PR for human review.</td></tr>
+          <tr><td class="k">Migrations / auth / money paths</td><td class="sev hi">HIGH</td><td>Keep them in <code>protected_files</code>. repayd payouts+gateways+tenant scopes and tmu's live UUID migration are explicit no-agent zones.</td></tr>
+          <tr><td class="k">Pi model availability &amp; keys</td><td class="sev lo">LOW</td><td><code>validate()</code> only checks model spelling, not keys — a missing provider key fails mid-chain. Point the whole roster at one <code>defaults.model</code> until you need per-phase models, to need one key.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 07 ROLLOUT -->
+  <section>
+    <h2><span class="n">07</span> Suggested rollout — crawl, walk, run</h2>
+    <p>Sequenced so trust is earned by evidence in the cockpit, not asserted. Maps onto the plan's observe-first v1.</p>
+    <div class="phase">
+      <div class="phase-head"><span class="phase-tag">Crawl</span><span class="phase-title">Observe on tmu</span><span class="phase-sub">read-only, zero commits</span></div>
+      <div class="phase-body"><ul class="tight">
+        <li>Stamp SSSF into tmu (smaller, lower-stakes). Wire <code>quality.py</code>. Point cockpit at its <code>sssf.db</code>.</li>
+        <li>Run <code>adw_scout</code> + <code>adw_plan</code> across a couple of green-zone modules. Read every envelope + gate report.</li>
+        <li>Goal: confirm the trace is faithful and the gates fire — no writes yet.</li>
+      </ul></div>
+    </div>
+    <div class="phase">
+      <div class="phase-head"><span class="phase-tag">Walk</span><span class="phase-title">First writes on tmu green zone</span><span class="phase-sub">branch-per-run, test-back-fill</span></div>
+      <div class="phase-body"><ul class="tight">
+        <li>Add the branch-per-run wrapper. Run <code>adw_build_test</code> to back-fill tests on <code>Brokers/</code> / <code>Insurers/</code>.</li>
+        <li>Review the resulting branch as a normal PR. Measure: gate pass-rate, retries, token cost per run in the cockpit.</li>
+        <li>Graduate to a small <code>adw_plan_build_test</code> feature once the loop feels boring.</li>
+      </ul></div>
+    </div>
+    <div class="phase">
+      <div class="phase-head"><span class="phase-tag">Run</span><span class="phase-title">repayd green zone, gates hardened</span><span class="phase-sub">money paths still human-only</span></div>
+      <div class="phase-body"><ul class="tight">
+        <li>Only after tmu is routine. Stamp repayd; wire <code>composer phpstan</code> + scoped Pest + <code>composer lint</code>; enforce no-<code>Co-Authored-By</code>.</li>
+        <li>Scope agents to <code>Docs/</code>, <code>Forex/</code>, <code>Shared/</code>, test back-fill. Transactions/Payouts/Gateways/auth/migrations stay off-limits indefinitely.</li>
+        <li>This is where Atelier's determinism spine earns its keep: level-8 PHPStan + phpat + Pest are a brutal, honest gate. Let them be the reviewer.</li>
+      </ul></div>
+    </div>
+    <p class="caption">Everything above is CLI-launched and watched in the read-only cockpit — i.e. it all fits inside the plan's <b>v1 (Phases 0–1)</b>. Launching these runs <i>from</i> the cockpit is Phase 2; none of the rollout waits on it.</p>
+  </section>
+
+  <div class="foot">
+    <p><b>Field guide</b> — companion to <a href="atelier-plan.html">atelier-plan.html</a>. · Grounded in a walk of <code>super-simple-software-factory</code> (engine mechanics, ADWs, gates, quality.py, agent_cc stub), <code>repayd.git/master</code>, and <code>tmu.git/develop</code>. · Three things to fix before first write: wire <code>quality.py</code>, add branch-per-run, scope <code>writes</code>/<code>protected_files</code>. · Start on tmu green zone; keep money paths human-only.</p>
+  </div>
+
+</div>
