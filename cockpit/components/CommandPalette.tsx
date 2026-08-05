@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { filterCommands, type Command } from '@/lib/palette';
 // Digit shortcuts (1–9) jump to views — derived from the sidebar's visible order.
 import { DIGIT_VIEWS } from '@/lib/nav';
+import { useProjectId } from '@/lib/use-project';
+import { projectHref } from '@/lib/project-url';
 
 function isTyping(): boolean {
   const el = document.activeElement;
@@ -15,6 +17,7 @@ function isTyping(): boolean {
 
 export function CommandPalette({ commands }: { commands: Command[] }) {
   const router = useRouter();
+  const projectId = useProjectId();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [index, setIndex] = useState(0);
@@ -37,7 +40,7 @@ export function CommandPalette({ commands }: { commands: Command[] }) {
         close();
       } else if (!open && /^[1-9]$/.test(e.key) && !e.metaKey && !e.ctrlKey && !e.altKey && !isTyping()) {
         const href = DIGIT_VIEWS[Number(e.key) - 1];
-        if (href) router.push(href);
+        if (href) router.push(projectHref(projectId, href));
       }
     }
     function onOpen() {
@@ -49,7 +52,7 @@ export function CommandPalette({ commands }: { commands: Command[] }) {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('atelier:palette', onOpen);
     };
-  }, [close, open, router]);
+  }, [close, open, router, projectId]);
 
   useEffect(() => {
     if (open) inputRef.current?.focus();
@@ -59,7 +62,7 @@ export function CommandPalette({ commands }: { commands: Command[] }) {
     if (!command) return;
     close();
     if (command.href.startsWith('http')) window.open(command.href, '_blank');
-    else router.push(command.href);
+    else router.push(projectHref(projectId, command.href));
   }
 
   if (!open) return null;

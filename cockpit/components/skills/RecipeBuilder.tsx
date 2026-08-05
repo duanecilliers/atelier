@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useProjectId } from '@/lib/use-project';
+import { withProject } from '@/lib/project-url';
 
 /**
  * The recipe composer — the write counterpart to the read-only cookbook. Pick a
@@ -36,6 +38,7 @@ const NAME_RE = /^[a-z][a-z0-9_]*$/;
 
 export function RecipeBuilder({ existingNames }: { existingNames: string[] }) {
   const router = useRouter();
+  const projectId = useProjectId();
   const [open, setOpen] = useState(false);
 
   const [catalog, setCatalog] = useState<Catalog | null>(null);
@@ -51,14 +54,14 @@ export function RecipeBuilder({ existingNames }: { existingNames: string[] }) {
   // Load the block catalog once the composer opens (make_adw is its authority).
   useEffect(() => {
     if (!open || catalog) return;
-    fetch('/api/adws')
+    fetch(withProject('/api/adws', projectId))
       .then(async (res) => {
         const data = (await res.json()) as Catalog & { error?: string };
         if (!res.ok) throw new Error(data.error ?? `failed to load blocks (${res.status})`);
         setCatalog(data);
       })
       .catch((e) => setCatalogError(e instanceof Error ? e.message : String(e)));
-  }, [open, catalog]);
+  }, [open, catalog, projectId]);
 
   // Steps in canonical order — the only order the generator accepts.
   const steps = useMemo(
@@ -112,7 +115,7 @@ export function RecipeBuilder({ existingNames }: { existingNames: string[] }) {
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch('/api/adws', {
+      const res = await fetch(withProject('/api/adws', projectId), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),

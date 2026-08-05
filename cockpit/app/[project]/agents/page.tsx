@@ -1,5 +1,6 @@
 import { getDb } from '@/lib/data';
 import { readRoster, rosterWarnings } from '@/lib/roster';
+import { pathsForProject } from '@/lib/projects';
 import { RosterEditor } from '@/components/agents/RosterEditor';
 import type { AgentTelemetry } from '@/lib/types';
 
@@ -13,24 +14,32 @@ export const dynamic = 'force-dynamic';
  * first config-write surface, kept inside the determinism spine (it writes a
  * config file, never a run's trace and never a process).
  */
-function load(): {
+function load(projectId: string): {
   roster: ReturnType<typeof readRoster> | null;
   telemetry: Record<string, AgentTelemetry>;
   warnings: ReturnType<typeof rosterWarnings>;
   error: string | null;
 } {
   try {
-    const roster = readRoster();
-    // Map → plain record so it crosses the server/client boundary as props.
-    const telemetry = Object.fromEntries(getDb().agentTelemetry());
+    const roster = readRoster(pathsForProject(projectId).configPath);
+    // Telemetry enriches the roster from the db, but a freshly-stamped project has
+    // no db until its first run. Treat a missing/unreadable db as "no telemetry"
+    // rather than failing the whole view — the roster (a config file) still renders.
+    let telemetry: Record<string, AgentTelemetry> = {};
+    try {
+      // Map → plain record so it crosses the server/client boundary as props.
+      telemetry = Object.fromEntries(getDb(projectId).agentTelemetry());
+    } catch {
+      // No db yet — show the roster without last-run data.
+    }
     return { roster, telemetry, warnings: rosterWarnings(roster), error: null };
   } catch (e) {
     return { roster: null, telemetry: {}, warnings: [], error: e instanceof Error ? e.message : String(e) };
   }
 }
 
-export default function AgentsPage() {
-  const { roster, telemetry, warnings, error } = load();
+export default function AgentsPage({ params }: { params: { project: string } }) {
+  const { roster, telemetry, warnings, error } = load(params.project);
 
   return (
     <div className="view">

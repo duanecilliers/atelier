@@ -19,14 +19,15 @@ export function openPalette() {
 
 export function Topbar() {
   const pathname = usePathname();
-  const segment = pathname.split('/')[1] ?? '';
+  // Path is /[project]/<view>/… — segment[1] is the project (named by the sidebar
+  // switcher), segment[2] is the view. An empty view segment is the runs root.
+  const parts = pathname.split('/');
+  const segment = parts[2] ?? '';
   const here = SEGMENT_LABELS[segment] ?? segment;
 
   return (
     <div className="sticky top-0 z-30 flex h-[52px] shrink-0 items-center gap-3.5 border-b border-os-border bg-os-bg2/70 px-6 backdrop-blur">
       <div className="flex items-center gap-[7px] whitespace-nowrap font-mono text-[11px] tracking-[0.04em] text-os-dim">
-        <span>atelier</span>
-        <span className="opacity-45">/</span>
         <span className="text-os-text">{here}</span>
       </div>
       <div className="ml-auto flex items-center gap-2.5">

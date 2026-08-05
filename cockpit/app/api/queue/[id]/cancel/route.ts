@@ -6,13 +6,14 @@ import { getControl } from '@/lib/control';
 // trace — the worker signals the process and the ADW closes its own.
 export const dynamic = 'force-dynamic';
 
-export function POST(_req: Request, { params }: { params: { id: string } }) {
+export function POST(req: Request, { params }: { params: { id: string } }) {
   const id = Number(params.id);
   if (!Number.isInteger(id) || id < 1) {
     return NextResponse.json({ error: 'invalid queue id' }, { status: 400 });
   }
+  const projectId = new URL(req.url).searchParams.get('project') ?? undefined;
   try {
-    const row = getControl().requestCancel(id);
+    const row = getControl(projectId).requestCancel(id);
     if (!row) {
       return NextResponse.json({ error: 'not found or already finished' }, { status: 409 });
     }

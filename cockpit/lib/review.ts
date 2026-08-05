@@ -17,7 +17,7 @@
  */
 import Database from 'better-sqlite3';
 import { existsSync } from 'node:fs';
-import { resolveDbPath } from './db';
+import { pathsForProject } from './projects';
 
 export class AtelierReview {
   private readonly db: Database.Database;
@@ -59,12 +59,17 @@ export class AtelierReview {
   }
 }
 
-const globalForReview = globalThis as unknown as { __atelierReview?: AtelierReview };
+const globalForReview = globalThis as unknown as { __atelierReviews?: Map<string, AtelierReview> };
 
-/** Memoized review connection, mirroring getDb()/getControl()'s HMR-safe singleton. */
-export function getReview(): AtelierReview {
-  if (!globalForReview.__atelierReview) {
-    globalForReview.__atelierReview = new AtelierReview(resolveDbPath());
+/** Memoized review connection per project, keyed by resolved db path — mirroring
+ *  getDb()/getControl()'s HMR-safe, path-keyed singletons. */
+export function getReview(projectId?: string): AtelierReview {
+  const path = pathsForProject(projectId).dbPath;
+  const map = (globalForReview.__atelierReviews ??= new Map<string, AtelierReview>());
+  let review = map.get(path);
+  if (!review) {
+    review = new AtelierReview(path);
+    map.set(path, review);
   }
-  return globalForReview.__atelierReview;
+  return review;
 }

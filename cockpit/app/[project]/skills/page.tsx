@@ -1,4 +1,5 @@
 import { readRecipes, type Recipe } from '@/lib/skills';
+import { pathsForProject } from '@/lib/projects';
 import { Badge, Label } from '@/components/terminal';
 import { RecipeBuilder } from '@/components/skills/RecipeBuilder';
 
@@ -10,16 +11,16 @@ export const dynamic = 'force-dynamic';
  * Read live from disk (see lib/skills.ts), never from the db — these are source,
  * not trace. Pure observe, like everything on the read path.
  */
-function load(): { recipes: Recipe[]; error: string | null } {
+function load(projectId: string): { recipes: Recipe[]; error: string | null } {
   try {
-    return { recipes: readRecipes(), error: null };
+    return { recipes: readRecipes(pathsForProject(projectId).adwsDir), error: null };
   } catch (e) {
     return { recipes: [], error: e instanceof Error ? e.message : String(e) };
   }
 }
 
-export default function SkillsPage() {
-  const { recipes, error } = load();
+export default function SkillsPage({ params }: { params: { project: string } }) {
+  const { recipes, error } = load(params.project);
 
   return (
     <div className="view">

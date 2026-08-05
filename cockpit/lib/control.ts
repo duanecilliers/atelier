@@ -20,9 +20,13 @@ import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { z } from 'zod';
 import { readAdwNames } from './skills';
-import { resolveDbPath } from './db';
+import { pathsForProject } from './projects';
 import { RunQueueRowSchema } from './schemas';
 import type { QueueStatus, RunQueueRow } from './types';
+
+/** A rejected enqueue the route maps to 400 (e.g. an adw_name not on disk for
+ *  this project). Distinct from a 5xx so a bad spec reads as user error. */
+export class EnqueueError extends Error {}
 
 // Mirrors engine/adws/adw_modules/queue.py::RUN_QUEUE_DDL. Kept in sync by hand;
 // pnpm check:contract fails loudly if the columns the cockpit expects drift.
@@ -46,11 +50,12 @@ CREATE TABLE IF NOT EXISTS run_queue (
   ended_at      TEXT
 );`;
 
-/** The validated shape a caller may enqueue. adw_name must name a script on disk
- *  (the dynamic allowlist — so a cockpit-built ADW is launchable at once), the
- *  same rule the worker re-checks before it spawns anything. */
+/** The validated shape a caller may enqueue. adw_name's on-disk existence (the
+ *  dynamic allowlist — so a cockpit-built ADW is launchable at once) is checked
+ *  in enqueue() against THIS project's adws/ dir, not here, since the schema has
+ *  no project context; the worker re-checks it before it spawns anything. */
 export const EnqueueSpecSchema = z.object({
-  adw_name: z.string().refine((n) => readAdwNames().has(n), 'unknown adw_name'),
+  adw_name: z.string().trim().min(1).max(64),
   request: z.string().trim().min(1, 'request is required').max(20_000),
   agent: z.string().trim().min(1).max(64).nullable().optional(),
   config: z.string().trim().min(1).max(512).nullable().optional(),
@@ -70,14 +75,17 @@ function newAdwId(): string {
 
 export class AtelierControl {
   private readonly db: Database.Database;
+  /** This project's adws/ dir — the allowlist enqueue() validates adw_name against. */
+  private readonly adwsDir: string;
 
-  constructor(path: string) {
+  constructor(path: string, adwsDir: string) {
     if (!existsSync(path)) {
       throw new Error(
         `sssf.db not found at ${path} — run an ADW in the engine (or set SSSF_DB) ` +
           `so the db exists before enqueuing.`,
       );
     }
+    this.adwsDir = adwsDir;
     this.db = new Database(path);
     this.db.pragma('busy_timeout = 5000');
     this.db.pragma('synchronous = NORMAL');
@@ -92,6 +100,10 @@ export class AtelierControl {
   /** INSERT a launch spec; returns the queue id + the adw_id the run will use. */
   enqueue(spec: EnqueueSpec): { id: number; adw_id: string } {
     const parsed = EnqueueSpecSchema.parse(spec);
+    // The dynamic allowlist, scoped to this project's ADWs on disk.
+    if (!readAdwNames(this.adwsDir).has(parsed.adw_name)) {
+      throw new EnqueueError(`unknown adw_name '${parsed.adw_name}' for this project`);
+    }
     const adwId = newAdwId();
     const info = this.db
       .prepare(
@@ -154,12 +166,17 @@ export class AtelierControl {
   }
 }
 
-const globalForControl = globalThis as unknown as { __atelierControl?: AtelierControl };
+const globalForControl = globalThis as unknown as { __atelierControls?: Map<string, AtelierControl> };
 
-/** Memoized control connection, mirroring getDb()'s HMR-safe singleton. */
-export function getControl(): AtelierControl {
-  if (!globalForControl.__atelierControl) {
-    globalForControl.__atelierControl = new AtelierControl(resolveDbPath());
+/** Memoized control connection per project, keyed by resolved db path — mirroring
+ *  getDb()'s HMR-safe, path-keyed singleton. */
+export function getControl(projectId?: string): AtelierControl {
+  const paths = pathsForProject(projectId);
+  const map = (globalForControl.__atelierControls ??= new Map<string, AtelierControl>());
+  let control = map.get(paths.dbPath);
+  if (!control) {
+    control = new AtelierControl(paths.dbPath, paths.adwsDir);
+    map.set(paths.dbPath, control);
   }
-  return globalForControl.__atelierControl;
+  return control;
 }

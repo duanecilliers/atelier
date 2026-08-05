@@ -15,7 +15,7 @@
  */
 import Database from 'better-sqlite3';
 import { existsSync } from 'node:fs';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
 import {
   AgentSessionRowSchema,
@@ -47,15 +47,11 @@ import type {
   SessionUsage,
 } from './types';
 
+// Only referenced by the constructor's not-found message; the actual path comes
+// from pathsForProject() (lib/projects.ts) via getDb().
 const DEFAULT_DB_RELATIVE = '../engine/adws/adw_data/sssf.db';
 const MAX_LIMIT = 1000;
 const DEFAULT_LIMIT = 500;
-
-/** Resolve the db path: SSSF_DB wins, else <cwd>/../engine/adws/adw_data/sssf.db. */
-export function resolveDbPath(): string {
-  const raw = process.env.SSSF_DB ?? DEFAULT_DB_RELATIVE;
-  return isAbsolute(raw) ? raw : resolve(process.cwd(), raw);
-}
 
 function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;

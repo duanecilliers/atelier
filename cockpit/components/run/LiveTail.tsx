@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Label } from '@/components/terminal';
+import { useProjectId } from '@/lib/use-project';
+import { withProject } from '@/lib/project-url';
 import type { Event, EventType } from '@/lib/types';
 
 /**
@@ -62,6 +64,7 @@ export function LiveTail({
   initialStatus: string | null;
 }) {
   const router = useRouter();
+  const projectId = useProjectId();
   // Newest-first for display; server hands them oldest-first (rowid asc).
   const [events, setEvents] = useState<Event[]>(() => [...initialEvents].reverse());
   const [status, setStatus] = useState<string | null>(initialStatus);
@@ -73,7 +76,7 @@ export function LiveTail({
     if (!running) return;
     // EventSource resumes from the last id it saw on reconnect; seed the very
     // first connect with our server-rendered cursor via ?after.
-    const es = new EventSource(`/api/runs/${adwId}/stream?after=${cursorRef.current}`);
+    const es = new EventSource(withProject(`/api/runs/${adwId}/stream?after=${cursorRef.current}`, projectId));
 
     es.onmessage = (ev) => {
       let page: { events: Event[]; cursor: number; status: string | null };
@@ -99,7 +102,7 @@ export function LiveTail({
     // to do — the status frame already drove the final refresh.
 
     return () => es.close();
-  }, [running, adwId, router]);
+  }, [running, adwId, router, projectId]);
 
   return (
     <div className="mb-8">

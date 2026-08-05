@@ -15,15 +15,14 @@
  * a recipe the factory composes.
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { basename, isAbsolute, join, resolve } from 'node:path';
+import { basename, join } from 'node:path';
+import { envProjectPaths } from './projects';
 
-/** Same resolution shape as resolveConfigPath(): an env override wins, else the
- *  sibling engine directory. Lets a test point the reader at a fixture dir. */
-const DEFAULT_ADWS_RELATIVE = '../engine/adws';
-
+/** The single-project ADW directory: SSSF_ADWS_DIR wins, else the sibling engine
+ *  directory. The multi-project dir comes from pathsForProject(); this is the
+ *  env-fallback default (and test escape hatch), defined once in projects.ts. */
 export function resolveAdwsDir(): string {
-  const raw = process.env.SSSF_ADWS_DIR ?? DEFAULT_ADWS_RELATIVE;
-  return isAbsolute(raw) ? raw : resolve(process.cwd(), raw);
+  return envProjectPaths().adwsDir;
 }
 
 export interface Recipe {

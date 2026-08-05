@@ -18,9 +18,10 @@
  */
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { parseDocument, stringify, type Document } from 'yaml';
 import { z } from 'zod';
+import { envProjectPaths } from './projects';
 import {
   CODING_AGENTS,
   QUALITY_AREAS,
@@ -33,27 +34,21 @@ import {
 
 export { CODING_AGENTS, THINKING_LEVELS, BUILTIN_TOOLS } from './roster-constants';
 
-/** Same shape as resolveDbPath(): SSSF_CONFIG wins, else the sibling engine file. */
-const DEFAULT_CONFIG_RELATIVE = '../engine/adws/adw_sssf_config/sssf.config.yaml';
-
+/** The single-project config path: SSSF_CONFIG wins, else the sibling engine file.
+ *  The multi-project path comes from pathsForProject(); this is the env-fallback
+ *  default (and test escape hatch), defined once in projects.ts. */
 export function resolveConfigPath(): string {
-  const raw = process.env.SSSF_CONFIG ?? DEFAULT_CONFIG_RELATIVE;
-  return isAbsolute(raw) ? raw : resolve(process.cwd(), raw);
+  return envProjectPaths().configPath;
 }
 
-/** Where a new agent's prompt files land on disk. The engine stores them under
- *  the repo-root-relative PROMPT_ENGINEERING_PREFIX; the cockpit runs from
- *  cockpit/, so by default it writes to the sibling engine tree. Env-overridable
- *  (SSSF_PE_DIR) so a config-write test can be isolated from the real files, the
- *  same escape hatch resolveConfigPath()/resolveAdwsDir() give. */
-const DEFAULT_PE_RELATIVE = '../engine/adws/adw_data/prompt_engineering';
 /** The prefix written INTO the config (repo-root-relative, engine/-prefixed like
  *  every other path there). Matches the existing agents' prompt_engineering paths. */
 const PROMPT_ENGINEERING_PREFIX = 'engine/adws/adw_data/prompt_engineering';
 
-function resolvePromptEngineeringDir(): string {
-  const raw = process.env.SSSF_PE_DIR ?? DEFAULT_PE_RELATIVE;
-  return isAbsolute(raw) ? raw : resolve(process.cwd(), raw);
+/** Where a new agent's prompt files land on disk. Single-project default (SSSF_PE_DIR
+ *  or the sibling engine tree) via projects.ts; addAgent() threads a per-project dir. */
+export function resolvePromptEngineeringDir(): string {
+  return envProjectPaths().promptEngineeringDir;
 }
 
 // ── Zod mirror of engine/adws/adw_modules/data_types.py ───────────────────────
@@ -553,8 +548,8 @@ Respond with ONLY valid JSON matching this agent's output model — no prose bef
 /** Bootstrap the two prompt files a new agent's config REQUIRES. Never clobbers:
  *  if a file already exists (e.g. an agent of this name was removed earlier and
  *  its git-tracked files were left in place), its content is preserved. */
-function bootstrapPromptFiles(name: string, purpose: string): void {
-  const dir = join(resolvePromptEngineeringDir(), name);
+function bootstrapPromptFiles(name: string, purpose: string, peDir: string): void {
+  const dir = join(peDir, name);
   mkdirSync(dir, { recursive: true });
   const sys = join(dir, 'system.md');
   const usr = join(dir, 'user.md');
@@ -565,7 +560,7 @@ function bootstrapPromptFiles(name: string, purpose: string): void {
 /** Serialize a new agent as a block-sequence item appended after the last agent,
  *  taking the dash/child indent from the first existing item's key column (so a
  *  non-standard indent is honoured, mirroring anchorInsertPoint's philosophy). */
-function newAgentItemSplice(doc: Document, src: string, spec: AgentCreate): Splice {
+function newAgentItemSplice(doc: Document, src: string, spec: AgentCreate, pePrefix: string): Splice {
   const items = agentSeqItems(doc);
   const first = items[0]?.range;
   const last = items[items.length - 1]?.range;
@@ -590,8 +585,8 @@ function newAgentItemSplice(doc: Document, src: string, spec: AgentCreate): Spli
   if (spec.color) obj.color = spec.color;
   if (spec.purpose) obj.purpose = spec.purpose;
   obj.prompt_engineering = {
-    system: `${PROMPT_ENGINEERING_PREFIX}/${spec.name}/system.md`,
-    user: `${PROMPT_ENGINEERING_PREFIX}/${spec.name}/user.md`,
+    system: `${pePrefix}/${spec.name}/system.md`,
+    user: `${pePrefix}/${spec.name}/user.md`,
   };
   obj.writes = [];
 
@@ -613,16 +608,21 @@ function newAgentItemSplice(doc: Document, src: string, spec: AgentCreate): Spli
  * file that isn't there. Like every config write it spawns nothing and touches no
  * run's trace. Returns the new roster.
  */
-export function addAgent(spec: AgentCreate, path = resolveConfigPath()): RosterConfig {
+export function addAgent(
+  spec: AgentCreate,
+  path = resolveConfigPath(),
+  peDir = resolvePromptEngineeringDir(),
+  pePrefix = PROMPT_ENGINEERING_PREFIX,
+): RosterConfig {
   const parsed = AgentCreateSchema.parse(spec);
   const { doc, src } = parseFileDoc(path);
   if (agentIndex(doc, parsed.name) >= 0) {
     throw new RosterInputError(`agent "${parsed.name}" already exists in the roster`);
   }
-  const out = applySplices(src, [newAgentItemSplice(doc, src, parsed)]);
+  const out = applySplices(src, [newAgentItemSplice(doc, src, parsed, pePrefix)]);
   const next = reparseAndValidate(out);
   // Config is valid — create the files it now references, then commit the YAML.
-  bootstrapPromptFiles(parsed.name, parsed.purpose ?? '');
+  bootstrapPromptFiles(parsed.name, parsed.purpose ?? '', peDir);
   writeAtomic(path, out);
   return next;
 }

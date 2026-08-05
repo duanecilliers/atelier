@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useProjectId } from '@/lib/use-project';
+import { withProject } from '@/lib/project-url';
 
 /**
  * Cancel a queued or running run. POSTs to /api/queue/[id]/cancel, which either
@@ -11,6 +13,7 @@ import { useRouter } from 'next/navigation';
  */
 export function CancelButton({ id }: { id: number }) {
   const router = useRouter();
+  const projectId = useProjectId();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -19,7 +22,7 @@ export function CancelButton({ id }: { id: number }) {
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`/api/queue/${id}/cancel`, { method: 'POST' });
+      const res = await fetch(withProject(`/api/queue/${id}/cancel`, projectId), { method: 'POST' });
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(data.error ?? `cancel failed (${res.status})`);

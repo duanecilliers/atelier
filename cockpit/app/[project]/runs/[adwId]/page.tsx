@@ -13,6 +13,7 @@ import { GatePanel } from '@/components/run/GatePanel';
 import { LiveTail } from '@/components/run/LiveTail';
 import { ArchiveControl } from '@/components/run/ArchiveControl';
 import { compact, duration, usd } from '@/lib/format';
+import { projectHref } from '@/lib/project-url';
 import type { Envelope, Event, GateResult, Phase, PhaseCost, SessionDetail } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -29,9 +30,9 @@ type Loaded = {
   sessionsDir: string;
 };
 
-function load(adwId: string): { data: Loaded | null; error: string | null; missing: boolean } {
+function load(projectId: string, adwId: string): { data: Loaded | null; error: string | null; missing: boolean } {
   try {
-    const db = getDb();
+    const db = getDb(projectId);
     const detail = db.sessionDetail(adwId);
     if (!detail) return { data: null, error: null, missing: true };
     const page = db.events(adwId, 0, 1000);
@@ -57,15 +58,15 @@ export default function RunDetailPage({
   params,
   searchParams,
 }: {
-  params: { adwId: string };
+  params: { project: string; adwId: string };
   searchParams?: { [key: string]: string | string[] | undefined };
 }) {
-  const { data, error, missing } = load(params.adwId);
+  const { data, error, missing } = load(params.project, params.adwId);
   if (missing) notFound();
   if (error || !data) {
     return (
       <div className="view">
-        <BackLink />
+        <BackLink projectId={params.project} />
         <pre className="mt-4 whitespace-pre-wrap border border-os-err/40 p-4 font-mono text-[11.5px] text-os-muted">
           {error}
         </pre>
@@ -90,7 +91,7 @@ export default function RunDetailPage({
 
   return (
     <div className="view">
-      <BackLink />
+      <BackLink projectId={params.project} />
 
       {/* header */}
       <div className="mb-1 mt-3 flex flex-wrap items-center gap-3">
@@ -98,7 +99,7 @@ export default function RunDetailPage({
         <Badge tone={STATUS_TONE[status] ?? 'default'}>{status}</Badge>
         {session.adw_name && <Badge>{session.adw_name}</Badge>}
         <div className="ml-auto">
-          <ArchiveControl adwId={session.adw_id} redirectTo="/" />
+          <ArchiveControl adwId={session.adw_id} redirectTo={projectHref(params.project, '/')} />
         </div>
       </div>
       <p className="mb-6 max-w-[80ch] text-[13px] text-os-muted">{session.request ?? '—'}</p>
@@ -177,9 +178,12 @@ function Agents({ agents }: { agents: SessionDetail['agents'] }) {
   );
 }
 
-function BackLink() {
+function BackLink({ projectId }: { projectId: string }) {
   return (
-    <Link href="/" className="font-mono text-[11px] text-os-dim transition-colors hover:text-os-accent">
+    <Link
+      href={projectHref(projectId, '/')}
+      className="font-mono text-[11px] text-os-dim transition-colors hover:text-os-accent"
+    >
       ← runs
     </Link>
   );

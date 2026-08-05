@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { getDb } from '@/lib/data';
 import { Badge, Label } from '@/components/terminal';
+import { projectHref } from '@/lib/project-url';
 import type { GateRollup } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -12,16 +13,16 @@ export const dynamic = 'force-dynamic';
  * only observes gates — acceptance is decided in the engine. See
  * AtelierDb.gateRollup; per-run evidence lives on the run-detail GatePanel.
  */
-function load(): { data: GateRollup | null; error: string | null } {
+function load(projectId: string): { data: GateRollup | null; error: string | null } {
   try {
-    return { data: getDb().gateRollup(), error: null };
+    return { data: getDb(projectId).gateRollup(), error: null };
   } catch (e) {
     return { data: null, error: e instanceof Error ? e.message : String(e) };
   }
 }
 
-export default function GatesPage() {
-  const { data, error } = load();
+export default function GatesPage({ params }: { params: { project: string } }) {
+  const { data, error } = load(params.project);
   const empty = !data || data.byGate.length === 0;
 
   return (
@@ -62,7 +63,7 @@ export default function GatesPage() {
                 {data.recentFailures.map((f, i) => (
                   <Link
                     key={`${f.adw_id}-${f.phase_id}-${i}`}
-                    href={`/runs/${f.adw_id}`}
+                    href={projectHref(params.project, `/runs/${f.adw_id}`)}
                     className="flex items-center gap-3 border-t border-os-hairline px-4 py-2.5 transition-colors first:border-t-0 hover:bg-os-bg2"
                   >
                     <Badge tone="err">fail</Badge>

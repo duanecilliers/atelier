@@ -4,6 +4,8 @@ import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { AGENT_ROSTER, inferAdw, type AdwSpec } from '@/lib/adws';
+import { useProjectId } from '@/lib/use-project';
+import { projectHref, withProject } from '@/lib/project-url';
 
 /**
  * The Conductor dock — the cockpit's launcher. Describe the work; Atelier infers
@@ -16,6 +18,7 @@ import { AGENT_ROSTER, inferAdw, type AdwSpec } from '@/lib/adws';
  */
 export function QueueLauncher({ catalog }: { catalog: AdwSpec[] }) {
   const router = useRouter();
+  const projectId = useProjectId();
   const [request, setRequest] = useState('');
   const [manualAdw, setManualAdw] = useState<string | null>(null);
   const [agent, setAgent] = useState<string>('scout');
@@ -36,7 +39,7 @@ export function QueueLauncher({ catalog }: { catalog: AdwSpec[] }) {
     setError(null);
     setLaunched(null);
     try {
-      const res = await fetch('/api/queue', {
+      const res = await fetch(withProject('/api/queue', projectId), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -140,7 +143,7 @@ export function QueueLauncher({ catalog }: { catalog: AdwSpec[] }) {
         {launched && (
           <p className="mt-3 border border-[color-mix(in_oklab,var(--ok)_30%,transparent)] bg-[color-mix(in_oklab,var(--ok)_7%,transparent)] px-3 py-2 font-mono text-[11.5px] text-os-ok">
             Queued run{' '}
-            <Link href={`/runs/${launched.adw_id}`} className="underline underline-offset-2">
+            <Link href={projectHref(projectId, `/runs/${launched.adw_id}`)} className="underline underline-offset-2">
               {launched.adw_id}
             </Link>{' '}
             — the worker picks it up next. Start it with{' '}
