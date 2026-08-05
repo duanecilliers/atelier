@@ -8,6 +8,7 @@ import {
   BUILTIN_TOOLS,
   CODING_AGENTS,
   THINKING_LEVELS,
+  validateAgentName,
   validateToolName,
   validateWritePattern,
 } from '@/lib/roster-constants';
@@ -86,11 +87,141 @@ export function RosterEditor({ roster, telemetry, warnings, now }: Props) {
               telemetry={telemetry[agent.name] ?? null}
               inheritedBackend={roster.defaults.coding_agent}
               inheritedModel={roster.defaults.model}
+              // The engine needs at least one agent; the last one can't be removed.
+              canRemove={roster.agents.length > 1}
               now={now}
             />
           ))}
         </div>
+        <AddAgentCard existingNames={roster.agents.map((a) => a.name)} />
       </section>
+    </div>
+  );
+}
+
+// ── Add an agent ──────────────────────────────────────────────────────────────
+
+/**
+ * The create surface — deliberately minimal: identity + the scalars. A new agent
+ * is bootstrapped with starter prompt files and starts read-only (`writes: []`);
+ * its tools, writes and prompts are then refined through the per-agent editor
+ * above. Kept small on purpose so "add" and "configure" stay separate steps.
+ */
+function AddAgentCard({ existingNames }: { existingNames: string[] }) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState('');
+  const [backend, setBackend] = useState<(typeof CODING_AGENTS)[number]>('pi');
+  const [model, setModel] = useState('');
+  const [thinking, setThinking] = useState('medium');
+  const [color, setColor] = useState('');
+  const [purpose, setPurpose] = useState('');
+  const { busy, error, request } = useSaver();
+
+  // Live name validation: the slug rule, plus a collision check the server also
+  // enforces — surfaced here so the operator sees it before submitting.
+  const trimmed = name.trim();
+  const nameErr = trimmed
+    ? existingNames.includes(trimmed)
+      ? `"${trimmed}" already exists`
+      : validateAgentName(trimmed)
+    : null;
+  const canSave = trimmed.length > 0 && !nameErr && !busy;
+
+  function reset() {
+    setOpen(false);
+    setName('');
+    setBackend('pi');
+    setModel('');
+    setThinking('medium');
+    setColor('');
+    setPurpose('');
+  }
+
+  async function onSave() {
+    if (!canSave) return;
+    // Send only the fields the operator actually set; the rest inherit defaults.
+    const body: Record<string, unknown> = { name: trimmed };
+    if (backend !== 'pi') body.coding_agent = backend;
+    if (model.trim()) body.model = model.trim();
+    if (thinking !== 'medium') body.thinking = thinking;
+    if (color.trim()) body.color = color.trim();
+    if (purpose.trim()) body.purpose = purpose;
+    const ok = await request('/api/roster', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (ok) {
+      reset();
+      router.refresh();
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="mt-px flex w-full items-center justify-center gap-2 border border-dashed border-os-border-strong bg-os-surface py-3 font-mono text-[11px] uppercase tracking-[0.14em] text-os-dim transition-colors hover:border-os-accent hover:text-os-accent"
+      >
+        <span className="text-[14px] leading-none">+</span> Add agent
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-px border border-os-border bg-os-surface p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <span className="font-mono text-[12px] font-bold tracking-[0.04em] text-os-text">New agent</span>
+        <div className="flex shrink-0 gap-1.5">
+          <button
+            onClick={reset}
+            disabled={busy}
+            className="rounded-sm-t border border-os-border-strong px-2.5 py-[5px] font-mono text-[10px] uppercase tracking-[0.14em] text-os-dim transition-colors hover:text-os-text disabled:opacity-40"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onSave}
+            disabled={!canSave}
+            className="rounded-sm-t border border-[var(--accent-line)] bg-[var(--accent-soft)] px-2.5 py-[5px] font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-os-accent transition-opacity hover:opacity-80 disabled:opacity-40"
+          >
+            {busy ? 'Adding…' : 'Add agent'}
+          </button>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <FieldShell label="Name">
+            <input
+              type="text"
+              value={name}
+              placeholder="e.g. critic"
+              spellCheck={false}
+              autoFocus
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && canSave) onSave();
+              }}
+              className={inputCls}
+            />
+          </FieldShell>
+          <SelectField label="Backend" value={backend} options={CODING_AGENTS} onChange={(v) => setBackend(v as (typeof CODING_AGENTS)[number])} />
+          <TextField label="Model" value={model} placeholder="provider/id — blank inherits defaults" onChange={setModel} />
+          <SelectField label="Thinking" value={thinking} options={THINKING_LEVELS} onChange={setThinking} />
+          <TextField label="Color" value={color} placeholder="#34d399" onChange={setColor} swatch />
+        </div>
+        <TextArea label="Purpose" value={purpose} onChange={setPurpose} />
+        {nameErr && <p className="font-mono text-[10.5px] text-os-err">{nameErr}</p>}
+        <p className="font-mono text-[10.5px] leading-snug text-os-dim">
+          Bootstraps <code>prompt_engineering/{trimmed || '<name>'}/system.md</code> + <code>user.md</code> and
+          starts <span className="text-os-muted">read-only</span> (writes: []). Set its tools, writes and prompts
+          from the card above once added.
+        </p>
+      </div>
+
+      {error && <ErrorLine>{error}</ErrorLine>}
     </div>
   );
 }
@@ -184,18 +315,26 @@ function AgentCard({
   telemetry,
   inheritedBackend,
   inheritedModel,
+  canRemove,
   now,
 }: {
   agent: RosterAgent;
   telemetry: AgentTelemetry | null;
   inheritedBackend: string;
   inheritedModel: string;
+  canRemove: boolean;
   now: number;
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<AgentPatch>({});
-  const { busy, error, save } = useSaver();
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
+  const { busy, error, save, request } = useSaver();
+
+  async function onRemove() {
+    const ok = await request(`/api/roster?name=${encodeURIComponent(agent.name)}`, { method: 'DELETE' });
+    if (ok) router.refresh();
+  }
 
   const value = <K extends 'coding_agent' | 'model' | 'thinking' | 'color' | 'purpose'>(
     k: K,
@@ -248,6 +387,7 @@ function AgentCard({
           onCancel={() => {
             setEditing(false);
             setDraft({});
+            setConfirmingRemove(false);
           }}
           onSave={onSave}
         />
@@ -291,6 +431,16 @@ function AgentCard({
               (e.g. subagent_*) are filtered out. Choose “specific tools” and name them.
             </p>
           )}
+
+          <RemoveAgentControl
+            name={agent.name}
+            canRemove={canRemove}
+            confirming={confirmingRemove}
+            busy={busy}
+            onAsk={() => setConfirmingRemove(true)}
+            onCancel={() => setConfirmingRemove(false)}
+            onConfirm={onRemove}
+          />
         </div>
       ) : (
         <>
@@ -318,17 +468,13 @@ function useSaver() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function save(body: unknown): Promise<boolean> {
+  async function request(url: string, init: RequestInit): Promise<boolean> {
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch('/api/roster', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      });
+      const res = await fetch(url, init);
       const data = (await res.json()) as { error?: string };
-      if (!res.ok) throw new Error(data.error ?? `save failed (${res.status})`);
+      if (!res.ok) throw new Error(data.error ?? `request failed (${res.status})`);
       return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -338,7 +484,15 @@ function useSaver() {
     }
   }
 
-  return { busy, error, save };
+  /** POST an allowlisted patch to /api/roster. */
+  const save = (body: unknown): Promise<boolean> =>
+    request('/api/roster', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  return { busy, error, save, request };
 }
 
 /** Keep only keys whose draft value differs from the original. */
@@ -492,6 +646,80 @@ function ErrorLine({ children }: { children: React.ReactNode }) {
     <p className="mt-3 border border-os-err/40 bg-[color-mix(in_oklab,var(--err)_7%,transparent)] px-3 py-2 font-mono text-[11px] text-os-err">
       {children}
     </p>
+  );
+}
+
+/**
+ * Remove-agent affordance, lives at the foot of the edit panel. Two-step inline
+ * confirm (no window.confirm — a browser modal would block automation and clash
+ * with the terminal aesthetic). Disabled with a note when this is the last agent.
+ */
+function RemoveAgentControl({
+  name,
+  canRemove,
+  confirming,
+  busy,
+  onAsk,
+  onCancel,
+  onConfirm,
+}: {
+  name: string;
+  canRemove: boolean;
+  confirming: boolean;
+  busy: boolean;
+  onAsk: () => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  if (!canRemove) {
+    return (
+      <div className="mt-1 border-t border-os-hairline pt-3">
+        <p className="font-mono text-[10.5px] text-os-dim">
+          the roster&apos;s last agent — can&apos;t be removed
+        </p>
+      </div>
+    );
+  }
+  if (!confirming) {
+    return (
+      <div className="mt-1 border-t border-os-hairline pt-3">
+        <button
+          type="button"
+          onClick={onAsk}
+          className="font-mono text-[10px] uppercase tracking-[0.14em] text-os-dim transition-colors hover:text-os-err"
+        >
+          Remove agent
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-1 border-t border-os-hairline pt-3">
+      <div className="border border-os-err/40 bg-[color-mix(in_oklab,var(--err)_6%,transparent)] px-3 py-2.5">
+        <p className="mb-2 font-mono text-[11px] leading-snug text-os-muted">
+          Remove <span className="font-bold text-os-text">{name}</span> from the roster? Its prompt files stay on
+          disk (delete them by hand if you want them gone).
+        </p>
+        <div className="flex gap-1.5">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded-sm-t border border-os-border-strong px-2.5 py-[5px] font-mono text-[10px] uppercase tracking-[0.14em] text-os-dim transition-colors hover:text-os-text disabled:opacity-40"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy}
+            className="rounded-sm-t border border-os-err/60 bg-[color-mix(in_oklab,var(--err)_12%,transparent)] px-2.5 py-[5px] font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-os-err transition-opacity hover:opacity-80 disabled:opacity-40"
+          >
+            {busy ? 'Removing…' : 'Confirm remove'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
