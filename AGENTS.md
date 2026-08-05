@@ -119,7 +119,7 @@ When asked to commit, propose a commit strategy:
 
 Conventional commit types: `feat`, `fix`, `refactor`, `test`, `docs`, `style`, `chore`, `perf`, `ci`, `build`
 
-Do NOT include any `Co-Authored-By` footer. Do NOT auto-commit — just present the strategy for review.
+Do NOT include any `Co-Authored-By` footer.
 
 ## Git & path layout (easy to get wrong)
 
