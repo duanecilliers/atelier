@@ -4,15 +4,32 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Badge, Label } from '@/components/terminal';
 import { compact, ago } from '@/lib/format';
-import { CODING_AGENTS, THINKING_LEVELS } from '@/lib/roster-constants';
+import {
+  BUILTIN_TOOLS,
+  CODING_AGENTS,
+  THINKING_LEVELS,
+  validateToolName,
+  validateWritePattern,
+} from '@/lib/roster-constants';
 import type { AgentTelemetry } from '@/lib/types';
 
 // The client mirror of lib/roster.ts's editable surface. Type-only so the
 // server module (node:fs + yaml) never reaches the client bundle.
 import type { RosterConfig, RosterAgent, RosterDefaults, RosterWarning } from '@/lib/roster';
 
-type AgentPatch = Partial<Pick<RosterAgent, 'coding_agent' | 'model' | 'thinking' | 'color' | 'purpose'>>;
-type DefaultsPatch = Partial<Pick<RosterDefaults, 'coding_agent' | 'model' | 'thinking'>>;
+type AgentPatch = Partial<
+  Pick<RosterAgent, 'coding_agent' | 'model' | 'thinking' | 'color' | 'purpose' | 'tools' | 'writes'>
+>;
+type DefaultsPatch = Partial<Pick<RosterDefaults, 'coding_agent' | 'model' | 'thinking' | 'tools'>>;
+
+/** A list field's value: an explicit list, or null = the key is absent —
+ *  `writes: null` is unrestricted, `tools: null` inherits defaults / all tools. */
+type List = string[] | null;
+const normList = (v: string[] | null | undefined): List => v ?? null;
+function listEq(a: List, b: List): boolean {
+  if (a === null || b === null) return a === b;
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
 
 interface Props {
   roster: RosterConfig;
@@ -23,11 +40,12 @@ interface Props {
 
 /**
  * The roster view + editor. Reads sssf.config.yaml (server) and edits the
- * allowlisted scalar fields (model, backend, thinking, color, purpose) by
- * POSTing a surgical patch to /api/roster, which rewrites the YAML in place
- * with its comments intact. The array fields (tools/writes) and the prompt/
- * harness wiring are the security + wiring boundary — shown read-only here and
- * left to a later, more careful write pass.
+ * allowlisted fields by POSTing a surgical patch to /api/roster, which rewrites
+ * the YAML in place with its comments intact. Editable: the scalars (model,
+ * backend, thinking, color, purpose) plus the security arrays — `tools` (per
+ * agent + defaults) and `writes` (per agent, the permission allowlist enforced
+ * in permissions.py). The prompt/harness paths and defaults.protected_files stay
+ * read-only — a later pass.
  */
 export function RosterEditor({ roster, telemetry, warnings, now }: Props) {
   return (
@@ -88,8 +106,11 @@ function DefaultsCard({ defaults }: { defaults: RosterDefaults }) {
   const value = <K extends keyof DefaultsPatch>(k: K): DefaultsPatch[K] =>
     (draft[k] ?? defaults[k]) as DefaultsPatch[K];
 
+  const curTools: List = 'tools' in draft ? (draft.tools as List) : normList(defaults.tools);
+
   async function onSave() {
     const patch = diff(draft, defaults, ['coding_agent', 'model', 'thinking']);
+    if (!listEq(curTools, normList(defaults.tools))) patch.tools = curTools;
     if (Object.keys(patch).length === 0) {
       setEditing(false);
       return;
@@ -121,10 +142,20 @@ function DefaultsCard({ defaults }: { defaults: RosterDefaults }) {
       </div>
 
       {editing ? (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <SelectField label="Backend" value={value('coding_agent') ?? 'pi'} options={CODING_AGENTS} onChange={(v) => setDraft((d) => ({ ...d, coding_agent: v as RosterDefaults['coding_agent'] }))} />
-          <TextField label="Model" value={value('model') ?? ''} placeholder="provider/id" onChange={(v) => setDraft((d) => ({ ...d, model: v }))} />
-          <SelectField label="Thinking" value={value('thinking') ?? 'medium'} options={THINKING_LEVELS} onChange={(v) => setDraft((d) => ({ ...d, thinking: v }))} />
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <SelectField label="Backend" value={value('coding_agent') ?? 'pi'} options={CODING_AGENTS} onChange={(v) => setDraft((d) => ({ ...d, coding_agent: v as RosterDefaults['coding_agent'] }))} />
+            <TextField label="Model" value={value('model') ?? ''} placeholder="provider/id" onChange={(v) => setDraft((d) => ({ ...d, model: v }))} />
+            <SelectField label="Thinking" value={value('thinking') ?? 'medium'} options={THINKING_LEVELS} onChange={(v) => setDraft((d) => ({ ...d, thinking: v }))} />
+          </div>
+          <EditorGroup label="Default tools" hint="the roster-wide allowlist; any agent may override with its own list">
+            <ToolsEditor
+              value={curTools}
+              onChange={(v) => setDraft((d) => ({ ...d, tools: v }))}
+              fallback={defaults.tools ?? []}
+              allLabel="all tools"
+            />
+          </EditorGroup>
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2 font-mono text-[12px]">
@@ -134,10 +165,11 @@ function DefaultsCard({ defaults }: { defaults: RosterDefaults }) {
         </div>
       )}
 
-      {/* Read-only structural fields — not editable from the cockpit (yet). */}
+      {/* Tools is edited above in edit mode; shown read-only otherwise.
+          protected_files stays read-only — a later pass. */}
       <div className="mt-4 border-t border-os-hairline pt-3">
-        <ReadOnlyChips label="Default tools" values={defaults.tools} nullLabel="all tools" />
-        <ReadOnlyChips label="Protected files" values={defaults.protected_files} className="mt-2" />
+        {!editing && <ReadOnlyChips label="Default tools" values={defaults.tools} nullLabel="all tools" />}
+        <ReadOnlyChips label="Protected files" values={defaults.protected_files} className={editing ? '' : 'mt-2'} />
       </div>
 
       {error && <ErrorLine>{error}</ErrorLine>}
@@ -165,16 +197,26 @@ function AgentCard({
   const [draft, setDraft] = useState<AgentPatch>({});
   const { busy, error, save } = useSaver();
 
-  const value = <K extends keyof AgentPatch>(k: K): AgentPatch[K] => (draft[k] ?? agent[k]) as AgentPatch[K];
+  const value = <K extends 'coding_agent' | 'model' | 'thinking' | 'color' | 'purpose'>(
+    k: K,
+  ): AgentPatch[K] => (draft[k] ?? agent[k]) as AgentPatch[K];
 
-  // Live guardrail: mirror lib/roster.ts's pi+anthropic smell against the draft
-  // so the operator sees it before saving, not after a run fails.
+  const curTools: List = 'tools' in draft ? (draft.tools as List) : normList(agent.tools);
+  const curWrites: List = 'writes' in draft ? (draft.writes as List) : normList(agent.writes);
+
+  // Live guardrails: mirror lib/roster.ts's smells against the draft so the
+  // operator sees them before saving, not after a run fails.
   const draftBackend = (value('coding_agent') || inheritedBackend) as string;
   const draftModel = (value('model') || inheritedModel) as string;
   const piAnthropic = draftBackend === 'pi' && draftModel.startsWith('anthropic/');
+  // A harness extension whose tools are not named in an explicit list gets
+  // filtered out (the agent inherits defaults.tools instead).
+  const harnessNeedsTools = (agent.harness_engineering?.length ?? 0) > 0 && curTools === null;
 
   async function onSave() {
     const patch = diff(draft, agent, ['coding_agent', 'model', 'thinking', 'color', 'purpose']);
+    if (!listEq(curTools, normList(agent.tools))) patch.tools = curTools;
+    if (!listEq(curWrites, normList(agent.writes))) patch.writes = curWrites;
     if (Object.keys(patch).length === 0) {
       setEditing(false);
       return;
@@ -220,9 +262,33 @@ function AgentCard({
             <TextField label="Color" value={value('color') ?? ''} placeholder="#a78bfa" onChange={(v) => setDraft((d) => ({ ...d, color: v }))} swatch />
           </div>
           <TextArea label="Purpose" value={value('purpose') ?? ''} onChange={(v) => setDraft((d) => ({ ...d, purpose: v }))} />
+
+          <EditorGroup label="Writes" hint="what this agent may modify in the repo — enforced after every run in permissions.py">
+            <WritesEditor
+              value={curWrites}
+              onChange={(v) => setDraft((d) => ({ ...d, writes: v }))}
+              fallback={agent.writes ?? []}
+            />
+          </EditorGroup>
+
+          <EditorGroup label="Tools" hint="capabilities for this agent; extension tools must be named here or they are filtered out">
+            <ToolsEditor
+              value={curTools}
+              onChange={(v) => setDraft((d) => ({ ...d, tools: v }))}
+              fallback={agent.tools ?? []}
+              allLabel="inherit defaults"
+            />
+          </EditorGroup>
+
           {piAnthropic && (
             <p className="font-mono text-[11px] text-os-warn">
               ⚠ backend “pi” + an anthropic/* model — pi&apos;s Anthropic OAuth is expired here; use claude_code.
+            </p>
+          )}
+          {harnessNeedsTools && (
+            <p className="font-mono text-[11px] text-os-warn">
+              ⚠ this agent loads a harness extension — with tools set to “inherit defaults”, its extension tools
+              (e.g. subagent_*) are filtered out. Choose “specific tools” and name them.
             </p>
           )}
         </div>
@@ -513,5 +579,272 @@ function TextArea({ label, value, onChange }: { label: string; value: string; on
         className={`${inputCls} resize-y leading-relaxed`}
       />
     </FieldShell>
+  );
+}
+
+// ── List editors (the security arrays) ────────────────────────────────────────
+
+/** A labelled block wrapping a non-<label> editor (buttons/inputs), with a hint. */
+function EditorGroup({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+        <span className="font-mono text-[8.5px] uppercase tracking-[0.16em] text-os-dim">{label}</span>
+        {hint && <span className="font-mono text-[10px] leading-snug text-os-dim">{hint}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Chip({ label, onRemove }: { label: string; onRemove: () => void }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-sm-t border border-os-hairline bg-os-bg px-1.5 py-[2px] font-mono text-[10.5px] text-os-muted">
+      {label}
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={`remove ${label}`}
+        className="text-os-dim transition-colors hover:text-os-err"
+      >
+        ×
+      </button>
+    </span>
+  );
+}
+
+/** A segmented pill group — one active value out of a small fixed set. */
+function Segmented({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+}) {
+  return (
+    <div className="inline-flex rounded-sm-t border border-os-border">
+      {options.map((o, i) => (
+        <button
+          key={o.value}
+          type="button"
+          onClick={() => onChange(o.value)}
+          className={
+            'px-2.5 py-[5px] font-mono text-[10px] uppercase tracking-[0.12em] transition-colors ' +
+            (i > 0 ? 'border-l border-os-border ' : '') +
+            (value === o.value
+              ? 'bg-[var(--accent-soft)] text-os-accent'
+              : 'text-os-dim hover:text-os-muted')
+          }
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Edit a list of strings: removable chips for the current values, an add input
+ * with per-entry validation, and — when given `suggestions` — a row of toggle
+ * pills for a known vocabulary (the builtin tools). Suggestion members render as
+ * toggles; anything else (extension tools, write patterns) renders as a chip.
+ */
+function StringListEditor({
+  values,
+  onChange,
+  validate,
+  suggestions = [],
+  placeholder,
+  addLabel = 'Add',
+  emptyHint,
+}: {
+  values: string[];
+  onChange: (v: string[]) => void;
+  validate?: (s: string) => string | null;
+  suggestions?: readonly string[];
+  placeholder?: string;
+  addLabel?: string;
+  emptyHint?: string;
+}) {
+  const [entry, setEntry] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const has = (v: string) => values.includes(v);
+  const extras = values.filter((v) => !suggestions.includes(v));
+
+  function commit(raw: string) {
+    const v = raw.trim();
+    if (!v) return;
+    const e = validate?.(v) ?? null;
+    if (e) {
+      setErr(e);
+      return;
+    }
+    if (!has(v)) onChange([...values, v]);
+    setEntry('');
+    setErr(null);
+  }
+  const remove = (v: string) => onChange(values.filter((x) => x !== v));
+
+  return (
+    <div className="space-y-2">
+      {suggestions.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {suggestions.map((s) => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => (has(s) ? remove(s) : onChange([...values, s]))}
+              className={
+                has(s)
+                  ? 'rounded-sm-t border border-[var(--accent-line)] bg-[var(--accent-soft)] px-2 py-[3px] font-mono text-[10.5px] text-os-accent'
+                  : 'rounded-sm-t border border-os-border px-2 py-[3px] font-mono text-[10.5px] text-os-dim transition-colors hover:border-os-border-strong hover:text-os-muted'
+              }
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {extras.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {extras.map((v) => (
+            <Chip key={v} label={v} onRemove={() => remove(v)} />
+          ))}
+        </div>
+      )}
+
+      <div className="flex gap-1.5">
+        <input
+          type="text"
+          value={entry}
+          placeholder={placeholder}
+          spellCheck={false}
+          onChange={(e) => {
+            setEntry(e.target.value);
+            if (err) setErr(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              commit(entry);
+            }
+          }}
+          className={inputCls}
+        />
+        <button
+          type="button"
+          onClick={() => commit(entry)}
+          className="shrink-0 rounded-sm-t border border-os-border-strong px-2.5 font-mono text-[10px] uppercase tracking-[0.14em] text-os-dim transition-colors hover:border-os-accent hover:text-os-accent"
+        >
+          {addLabel}
+        </button>
+      </div>
+
+      {err && <p className="font-mono text-[10.5px] text-os-err">{err}</p>}
+      {values.length === 0 && emptyHint && <p className="font-mono text-[10.5px] text-os-dim">{emptyHint}</p>}
+    </div>
+  );
+}
+
+/**
+ * The `tools` editor: a specific allowlist, or the key removed. Removing it means
+ * "all tools" on defaults and "inherit defaults" on an agent (agents.py merges
+ * defaults.tools into an agent that omits its own). `fallback` seeds the list
+ * when toggling back to specific so the original isn't lost.
+ */
+function ToolsEditor({
+  value,
+  onChange,
+  fallback,
+  allLabel,
+}: {
+  value: List;
+  onChange: (v: List) => void;
+  fallback: string[];
+  allLabel: string;
+}) {
+  const specific = value !== null;
+  return (
+    <div className="space-y-2.5">
+      <Segmented
+        value={specific ? 'specific' : 'all'}
+        onChange={(m) => onChange(m === 'all' ? null : (value ?? (fallback.length ? fallback : [])))}
+        options={[
+          { value: 'specific', label: 'Specific tools' },
+          { value: 'all', label: allLabel },
+        ]}
+      />
+      {specific && (
+        <StringListEditor
+          values={value ?? []}
+          onChange={onChange}
+          suggestions={BUILTIN_TOOLS}
+          validate={validateToolName}
+          placeholder="extension tool, e.g. subagent_create"
+          emptyHint="no tools — this agent could do nothing; pick some above or add one"
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The `writes` tri-state: unrestricted (key removed), read-only (`[]`), or an
+ * allowlist of repo-relative patterns. `mode` is held locally so an allowlist
+ * that momentarily empties stays in allowlist rather than snapping to read-only.
+ */
+function WritesEditor({
+  value,
+  onChange,
+  fallback,
+}: {
+  value: List;
+  onChange: (v: List) => void;
+  fallback: string[];
+}) {
+  const [mode, setMode] = useState<'unrestricted' | 'readonly' | 'allowlist'>(
+    value === null ? 'unrestricted' : value.length === 0 ? 'readonly' : 'allowlist',
+  );
+  function pick(m: string) {
+    const mm = m as 'unrestricted' | 'readonly' | 'allowlist';
+    setMode(mm);
+    if (mm === 'unrestricted') onChange(null);
+    else if (mm === 'readonly') onChange([]);
+    else onChange(value && value.length ? value : fallback.length ? fallback : []);
+  }
+  return (
+    <div className="space-y-2.5">
+      <Segmented
+        value={mode}
+        onChange={pick}
+        options={[
+          { value: 'unrestricted', label: 'Unrestricted' },
+          { value: 'readonly', label: 'Read-only' },
+          { value: 'allowlist', label: 'Allowlist' },
+        ]}
+      />
+      {mode === 'allowlist' && (
+        <StringListEditor
+          values={value ?? []}
+          onChange={onChange}
+          validate={validateWritePattern}
+          placeholder="path or glob, e.g. specs/ or **/*.md"
+          emptyHint="no paths yet — read-only until you add one"
+        />
+      )}
+      {mode === 'unrestricted' && (
+        <p className="font-mono text-[10.5px] text-os-warn">
+          may modify any repo path except defaults.protected_files — grant sparingly.
+        </p>
+      )}
+      {mode === 'readonly' && (
+        <p className="font-mono text-[10.5px] text-os-dim">
+          may modify nothing in the repo (it can still write its own report under data_dir).
+        </p>
+      )}
+    </div>
   );
 }
