@@ -107,6 +107,16 @@ export function SectionHead({
   );
 }
 
+/** One labelled metric tile — the unit of the stat rows on run-detail and /cost. */
+export function Stat({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="bg-os-bg px-4 py-3">
+      <div className="font-mono text-[8.5px] uppercase tracking-[0.16em] text-os-dim">{label}</div>
+      <div className="mt-1 font-mono text-[20px] font-bold tabular-nums text-os-text">{value}</div>
+    </div>
+  );
+}
+
 export function Kbd({ children }: { children: React.ReactNode }) {
   return (
     <kbd className="rounded-sm-t border border-os-border-strong border-b-2 bg-os-surface px-1.5 py-0.5 font-mono text-[10px] text-os-muted">

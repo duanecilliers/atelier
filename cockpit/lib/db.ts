@@ -29,11 +29,15 @@ import {
 import type {
   AgentSession,
   AgentStartPayload,
+  CostRollup,
   Envelope,
   Event,
   EventsPage,
   GateResult,
+  GateRollup,
+  ModelSpend,
   Phase,
+  PhaseCost,
   Process,
   RunQueueRow,
   Session,
@@ -55,6 +59,28 @@ export function resolveDbPath(): string {
 function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, Math.trunc(value)));
+}
+
+/**
+ * Split one `agent_end` payload into read/written tokens and cost — the same
+ * derivation `usage()` does per row, factored out because the Phase 3 rollups
+ * need it too. `read` = new input + cache writes (what actually moved), NOT the
+ * billed input (which re-counts cached re-reads). A payload from an older tracer
+ * simply contributes zeros.
+ */
+function splitAgentEnd(payloadJson: string | null): { read: number; written: number; cost: number } {
+  if (!payloadJson) return { read: 0, written: 0, cost: 0 };
+  try {
+    const p = JSON.parse(payloadJson) as { cost?: number; usage?: Record<string, number> };
+    const u = p.usage ?? {};
+    return {
+      read: (u.input_tokens ?? 0) + (u.cache_write_tokens ?? 0),
+      written: u.output_tokens ?? 0,
+      cost: p.cost ?? 0,
+    };
+  } catch {
+    return { read: 0, written: 0, cost: 0 };
+  }
 }
 
 export class AtelierDb {
@@ -306,17 +332,211 @@ export class AtelierDb {
     let read = 0;
     let written = 0;
     for (const row of rows) {
-      if (!row.payload_json) continue;
-      try {
-        const u = (JSON.parse(row.payload_json) as { usage?: Record<string, number> }).usage;
-        if (!u) continue;
-        read += (u.input_tokens ?? 0) + (u.cache_write_tokens ?? 0);
-        written += u.output_tokens ?? 0;
-      } catch {
-        /* a payload written by an older tracer simply contributes nothing */
-      }
+      const s = splitAgentEnd(row.payload_json);
+      read += s.read;
+      written += s.written;
     }
     return { read, written };
+  }
+
+  /**
+   * The most-recent (non-archived) adw_ids, newest first — the scan window the
+   * cross-run rollups bound themselves to so a 1000-run db stays cheap. Built the
+   * same way sessions() filters archived, tolerating a db without that column.
+   */
+  private recentAdwIds(limit: number): string[] {
+    const archived = this.hasColumn('sessions', 'archived') ? 'archived' : '0';
+    const rows = this.db
+      .prepare(
+        `SELECT adw_id FROM sessions
+          WHERE COALESCE(${archived}, 0) = 0
+          ORDER BY started_at DESC, rowid DESC
+          LIMIT ?`,
+      )
+      .all(clamp(limit, 1, MAX_LIMIT)) as { adw_id: string }[];
+    return rows.map((r) => r.adw_id);
+  }
+
+  /**
+   * The per-run model stack: one row per phase, in seq order, carrying the model
+   * that ran it (from agent_sessions — null while a run is still live), its
+   * retry count, and the phase's token/cost totals (already summed across
+   * retries by the engine). LEFT JOIN so a phase whose agent_session row hasn't
+   * landed yet still appears, just without a model.
+   */
+  runModelStack(adwId: string): PhaseCost[] {
+    const rows = this.db
+      .prepare(
+        `SELECT e.phase_id, e.name AS agent, e.payload_json,
+                p.seq, p.name AS phase_name, p.attempt, p.retries,
+                s.model, s.coding_agent
+           FROM events e
+           JOIN phases p ON p.phase_id = e.phase_id
+           LEFT JOIN agent_sessions s ON s.adw_id = e.adw_id AND s.agent = e.name
+          WHERE e.adw_id = ? AND e.type = 'agent_end'
+          ORDER BY p.seq, e.rowid`,
+      )
+      .all(adwId) as {
+      phase_id: string;
+      agent: string | null;
+      payload_json: string | null;
+      seq: number;
+      phase_name: string | null;
+      attempt: number | null;
+      retries: number | null;
+      model: string | null;
+      coding_agent: string | null;
+    }[];
+
+    return rows.map((r) => {
+      const { read, written, cost } = splitAgentEnd(r.payload_json);
+      return {
+        phase_id: r.phase_id,
+        seq: r.seq,
+        phase_name: r.phase_name ?? '—',
+        agent: r.agent ?? '—',
+        model: r.model,
+        coding_agent: r.coding_agent,
+        attempt: r.attempt,
+        retries: r.retries,
+        read,
+        written,
+        cost,
+      };
+    });
+  }
+
+  /**
+   * Cross-run spend, grouped by model. Walks the agent_end payloads of the most
+   * recent `limit` runs, attributing each to its model (falling back to the
+   * backend, then "unknown", when agent_sessions has no model). `runs` per model
+   * is a distinct-adw_id count; `share` is each model's slice of grand-total $.
+   */
+  costRollup(limit = 200): CostRollup {
+    const empty: CostRollup = { totals: { runs: 0, read: 0, written: 0, cost: 0 }, byModel: [] };
+    const ids = this.recentAdwIds(limit);
+    if (ids.length === 0) return empty;
+    const placeholders = ids.map(() => '?').join(', ');
+
+    const rows = this.db
+      .prepare(
+        `SELECT e.adw_id, e.name AS agent, e.payload_json, s.model, s.coding_agent
+           FROM events e
+           LEFT JOIN agent_sessions s ON s.adw_id = e.adw_id AND s.agent = e.name
+          WHERE e.type = 'agent_end' AND e.adw_id IN (${placeholders})`,
+      )
+      .all(...ids) as {
+      adw_id: string;
+      agent: string | null;
+      payload_json: string | null;
+      model: string | null;
+      coding_agent: string | null;
+    }[];
+
+    type Acc = ModelSpend & { runIds: Set<string> };
+    const byModel = new Map<string, Acc>();
+    const allRuns = new Set<string>();
+    const totals = { read: 0, written: 0, cost: 0 };
+
+    for (const r of rows) {
+      const key = r.model ?? r.coding_agent ?? 'unknown';
+      const { read, written, cost } = splitAgentEnd(r.payload_json);
+      let acc = byModel.get(key);
+      if (!acc) {
+        acc = {
+          model: key,
+          coding_agent: r.coding_agent,
+          runs: 0,
+          read: 0,
+          written: 0,
+          cost: 0,
+          share: 0,
+          runIds: new Set<string>(),
+        };
+        byModel.set(key, acc);
+      }
+      if (acc.coding_agent == null && r.coding_agent != null) acc.coding_agent = r.coding_agent;
+      acc.read += read;
+      acc.written += written;
+      acc.cost += cost;
+      acc.runIds.add(r.adw_id);
+      allRuns.add(r.adw_id);
+      totals.read += read;
+      totals.written += written;
+      totals.cost += cost;
+    }
+
+    const spend = [...byModel.values()].map(({ runIds, ...m }) => {
+      m.runs = runIds.size;
+      m.share = totals.cost > 0 ? m.cost / totals.cost : 0;
+      return m;
+    });
+    spend.sort((a, b) => b.cost - a.cost);
+
+    return { totals: { runs: allRuns.size, ...totals }, byModel: spend };
+  }
+
+  /**
+   * Cross-run gate health, grouped by gate type: pass/fail/retry counts and a
+   * pass-rate, plus the latest failing results (each linking back to its run).
+   * Bounded to the most recent `limit` runs like the cost rollup.
+   */
+  gateRollup(limit = 200, failuresLimit = 20): GateRollup {
+    const ids = this.recentAdwIds(limit);
+    if (ids.length === 0) return { byGate: [], recentFailures: [] };
+    const placeholders = ids.map(() => '?').join(', ');
+
+    const rows = this.db
+      .prepare(
+        `SELECT adw_id, gate, phase_id, passed, attempt, created_at
+           FROM gate_results
+          WHERE adw_id IN (${placeholders})
+          ORDER BY id DESC`,
+      )
+      .all(...ids) as {
+      adw_id: string;
+      gate: string;
+      phase_id: string;
+      passed: number | null;
+      attempt: number | null;
+      created_at: string | null;
+    }[];
+
+    type Acc = GateRollup['byGate'][number] & { runIds: Set<string> };
+    const byGate = new Map<string, Acc>();
+    const recentFailures: GateRollup['recentFailures'] = [];
+
+    for (const r of rows) {
+      let acc = byGate.get(r.gate);
+      if (!acc) {
+        acc = { gate: r.gate, runs: 0, passed: 0, failed: 0, retries: 0, passRate: 1, runIds: new Set() };
+        byGate.set(r.gate, acc);
+      }
+      const passed = r.passed === 1;
+      if (passed) acc.passed += 1;
+      else acc.failed += 1;
+      if ((r.attempt ?? 1) > 1) acc.retries += 1;
+      acc.runIds.add(r.adw_id);
+      if (!passed && recentFailures.length < failuresLimit) {
+        recentFailures.push({
+          adw_id: r.adw_id,
+          gate: r.gate,
+          phase_id: r.phase_id,
+          attempt: r.attempt,
+          created_at: r.created_at,
+        });
+      }
+    }
+
+    const gates = [...byGate.values()].map(({ runIds, ...g }) => {
+      g.runs = runIds.size;
+      const total = g.passed + g.failed;
+      g.passRate = total > 0 ? g.passed / total : 1;
+      return g;
+    });
+    gates.sort((a, b) => a.gate.localeCompare(b.gate));
+
+    return { byGate: gates, recentFailures };
   }
 
   /**

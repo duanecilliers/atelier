@@ -285,3 +285,76 @@ export interface EventsPage {
   cursor: number;
   has_more: boolean;
 }
+
+// ── Phase 3: observability & cost (all derived from agent_end + gate_results) ─
+// None of these mirror a db row — they're aggregates the cockpit computes over
+// the trace the engine already writes. The seam contract (row interfaces +
+// schemas.ts) is untouched by Phase 3.
+
+/**
+ * One phase's cost, for the per-run model stack. Numbers are the engine's
+ * phase totals — already summed across retries (agents.py writes them that way).
+ */
+export interface PhaseCost {
+  phase_id: string;
+  seq: number;
+  phase_name: string;
+  /** The agent that ran the phase (phases.owner / agent_end.name). */
+  agent: string;
+  /** Model + backend from agent_sessions; null while a run is still live. */
+  model: string | null;
+  coding_agent: string | null;
+  attempt: number | null;
+  retries: number | null;
+  /** Split the same way SessionUsage does: read = input + cache_write. */
+  read: number;
+  written: number;
+  cost: number;
+}
+
+/** Cross-run spend for one model (or backend/"unknown" when model is absent). */
+export interface ModelSpend {
+  model: string;
+  coding_agent: string | null;
+  /** Distinct runs this model appeared in. */
+  runs: number;
+  read: number;
+  written: number;
+  cost: number;
+  /** cost / grand-total cost, 0..1. 0 when the grand total is 0. */
+  share: number;
+}
+
+/** The /cost dashboard: grand totals + a per-model breakdown, most-spend first. */
+export interface CostRollup {
+  totals: { runs: number; read: number; written: number; cost: number };
+  byModel: ModelSpend[];
+}
+
+/** Cross-run health for one gate type. */
+export interface GateHealth {
+  gate: string;
+  /** Distinct runs this gate fired in. */
+  runs: number;
+  passed: number;
+  failed: number;
+  /** Gate results recorded on a retry (attempt > 1). */
+  retries: number;
+  /** passed / (passed + failed), 0..1. 1 when nothing has failed. */
+  passRate: number;
+}
+
+/** A pointer to one failing gate result, for the recent-failures list. */
+export interface GateFailureRef {
+  adw_id: string;
+  gate: string;
+  phase_id: string;
+  attempt: number | null;
+  created_at: string | null;
+}
+
+/** The /gates dashboard: per-gate health + the latest failures across runs. */
+export interface GateRollup {
+  byGate: GateHealth[];
+  recentFailures: GateFailureRef[];
+}
