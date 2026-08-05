@@ -24,6 +24,23 @@ export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 export const BUILTIN_TOOLS = ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'] as const;
 export type BuiltinTool = (typeof BUILTIN_TOOLS)[number];
 
+// An agent name becomes BOTH a YAML key in the roster and a directory on disk
+// (prompt_engineering/{name}/), so it must be a safe slug: a lowercase letter
+// then lowercase letters, digits, "-" or "_". No dots, slashes or leading digit.
+const AGENT_NAME_RE = /^[a-z][a-z0-9_-]*$/;
+
+/** null if the name is a usable agent slug, else a human-readable reason. Shared
+ *  by the create/remove Zod schemas (server) and the add-agent form (client). */
+export function validateAgentName(name: string): string | null {
+  const n = name.trim();
+  if (!n) return 'name is empty';
+  if (n.length > 40) return 'name is too long';
+  if (!AGENT_NAME_RE.test(n)) {
+    return `"${n}" — lowercase letters, digits, - and _; must start with a letter (it becomes a config key and a directory)`;
+  }
+  return null;
+}
+
 const TOOL_NAME_RE = /^[a-z][a-z0-9_]*$/;
 
 /** null if the name is a usable tool token, else a human-readable reason. */

@@ -38,8 +38,9 @@ export default function AgentsPage() {
       <h1 className="mb-1 text-[28px] font-bold uppercase tracking-[0.06em]">Agents</h1>
       <p className="mb-6 max-w-[64ch] text-[13px] text-os-muted">
         The factory&apos;s roster, read live from <code className="text-os-dim">sssf.config.yaml</code> and
-        enriched with each agent&apos;s last run. Edit a model, backend, thinking level, color or purpose —
-        the change is written straight back to the config, comments and all.
+        enriched with each agent&apos;s last run. Edit a model, backend, thinking level, color, purpose, tools or
+        writes — or add and remove agents entirely. Every change is written straight back to the config,
+        comments and all.
       </p>
 
       {error ? (

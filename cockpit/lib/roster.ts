@@ -17,13 +17,14 @@
  * survive every edit.
  */
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { isAbsolute, resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { isAbsolute, join, resolve } from 'node:path';
 import { parseDocument, stringify, type Document } from 'yaml';
 import { z } from 'zod';
 import {
   CODING_AGENTS,
   THINKING_LEVELS,
+  validateAgentName,
   validateToolName,
   validateWritePattern,
 } from './roster-constants';
@@ -35,6 +36,21 @@ const DEFAULT_CONFIG_RELATIVE = '../engine/adws/adw_sssf_config/sssf.config.yaml
 
 export function resolveConfigPath(): string {
   const raw = process.env.SSSF_CONFIG ?? DEFAULT_CONFIG_RELATIVE;
+  return isAbsolute(raw) ? raw : resolve(process.cwd(), raw);
+}
+
+/** Where a new agent's prompt files land on disk. The engine stores them under
+ *  the repo-root-relative PROMPT_ENGINEERING_PREFIX; the cockpit runs from
+ *  cockpit/, so by default it writes to the sibling engine tree. Env-overridable
+ *  (SSSF_PE_DIR) so a config-write test can be isolated from the real files, the
+ *  same escape hatch resolveConfigPath()/resolveAdwsDir() give. */
+const DEFAULT_PE_RELATIVE = '../engine/adws/adw_data/prompt_engineering';
+/** The prefix written INTO the config (repo-root-relative, engine/-prefixed like
+ *  every other path there). Matches the existing agents' prompt_engineering paths. */
+const PROMPT_ENGINEERING_PREFIX = 'engine/adws/adw_data/prompt_engineering';
+
+function resolvePromptEngineeringDir(): string {
+  const raw = process.env.SSSF_PE_DIR ?? DEFAULT_PE_RELATIVE;
   return isAbsolute(raw) ? raw : resolve(process.cwd(), raw);
 }
 
@@ -179,6 +195,43 @@ export const RosterEditSchema = z
 
 export type RosterEdit = z.infer<typeof RosterEditSchema>;
 export type AgentPatch = z.infer<typeof AgentPatchSchema>;
+
+// ── Add / remove an agent ─────────────────────────────────────────────────────
+// A different KIND of write from a scalar/array patch: adding creates a whole new
+// `agents[]` map entry AND bootstraps the two prompt files it requires; removing
+// splices the entry out. The create surface is deliberately minimal — identity +
+// the scalars — because tools/writes/prompts are then refined through the existing
+// per-agent editor. A new agent starts read-only (`writes: []`): a fresh,
+// unconfigured agent must not be able to modify the repo until an operator grants
+// it (the factory-self-hosts safety posture, matching scout/reviewer).
+
+const agentSlug = z
+  .string()
+  .superRefine((n, ctx) => {
+    const err = validateAgentName(n);
+    if (err) ctx.addIssue({ code: z.ZodIssueCode.custom, message: err });
+  })
+  .transform((n) => n.trim());
+
+export const AgentCreateSchema = z
+  .object({
+    name: agentSlug,
+    coding_agent: z.enum(CODING_AGENTS).optional(),
+    model: z.string().regex(MODEL_PATTERN, 'model must look like provider/id').optional(),
+    thinking: z.enum(THINKING_LEVELS).optional(),
+    color: HEX_OR_EMPTY.optional(),
+    purpose: z
+      .string()
+      .max(400)
+      .transform((s) => s.replace(/\s+/g, ' ').trim())
+      .optional(),
+  })
+  .strict();
+
+export type AgentCreate = z.infer<typeof AgentCreateSchema>;
+
+/** The name of the agent to remove (a bare slug, validated like a create name). */
+export const AgentNameSchema = agentSlug;
 
 /** A bad-input error (unknown agent, unplaceable key) — a 4xx, not a 5xx. */
 export class RosterInputError extends Error {}
@@ -367,12 +420,48 @@ function splicesForMap(
   return out;
 }
 
+/** Apply a set of splices to the source, high-offset-first so each splice's
+ *  ranges stay valid as earlier text shifts. Pure — returns the new source. */
+function applySplices(src: string, splices: Splice[]): string {
+  const sorted = [...splices].sort((a, b) => b.start - a.start || b.end - a.end);
+  let out = src;
+  for (const s of sorted) out = out.slice(0, s.start) + s.text + out.slice(s.end);
+  return out;
+}
+
+/** Belt and suspenders: the rewritten source must still parse and satisfy the
+ *  whole mirror. A splice that somehow broke the shape fails here, before disk. */
+function reparseAndValidate(out: string): RosterConfig {
+  const reparsed = parseDocument(out);
+  if (reparsed.errors.length > 0) {
+    throw new Error(`edit produced invalid YAML: ${reparsed.errors[0]!.message}`);
+  }
+  return RosterConfigSchema.parse(reparsed.toJS());
+}
+
+/** Atomic write: same-directory temp then rename, so a crash mid-write never
+ *  leaves the engine a half-written config to choke on. The random suffix keeps
+ *  two concurrent writes (same pid) from colliding on the temp path. */
+function writeAtomic(path: string, out: string): void {
+  const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`;
+  writeFileSync(tmp, out, 'utf8');
+  renameSync(tmp, path);
+}
+
+/** Splice → validate → atomic write. The common tail for a config mutation that
+ *  touches only the YAML (patches and removals). */
+function applyAndPersist(src: string, splices: Splice[], path: string): RosterConfig {
+  const out = applySplices(src, splices);
+  const next = reparseAndValidate(out);
+  writeAtomic(path, out);
+  return next;
+}
+
 /**
  * Apply an allowlisted patch to the roster and persist it. SURGICAL at the byte
  * level: we compute the source span of each edited value and splice only that,
  * so a one-field change is a one-line diff and the config's hand-aligned
- * comments are left exactly as they were. Splices are applied high-offset-first
- * so earlier edits never shift later ranges. The result is re-parsed and
+ * comments are left exactly as they were. The result is re-parsed and
  * re-validated against the whole mirror before it can reach disk, then written
  * atomically (temp + rename). Returns the new roster.
  */
@@ -392,27 +481,186 @@ export function writeRoster(edit: RosterEdit, path = resolveConfigPath()): Roste
     }
   }
 
-  // Apply high offset first so each splice's ranges stay valid as we mutate.
-  splices.sort((a, b) => b.start - a.start || b.end - a.end);
-  let out = src;
-  for (const s of splices) out = out.slice(0, s.start) + s.text + out.slice(s.end);
+  return applyAndPersist(src, splices, path);
+}
 
-  // Belt and suspenders: the rewritten source must still parse and satisfy the
-  // whole mirror. A splice that somehow broke the shape fails here, and the file
-  // is never touched.
-  const reparsed = parseDocument(out);
-  if (reparsed.errors.length > 0) {
-    throw new Error(`edit produced invalid YAML: ${reparsed.errors[0]!.message}`);
+// ── Add an agent ──────────────────────────────────────────────────────────────
+
+/** A YAMLSeq item carries a [start, valueEnd, nodeEnd] range; start is the first
+ *  key's offset (after the "- " marker), not the marker itself. */
+type SeqItem = { range?: [number, number, number] };
+
+function agentSeqItems(doc: Document): SeqItem[] {
+  const seq = doc.get('agents', true) as { items?: SeqItem[] } | undefined;
+  return seq?.items ?? [];
+}
+
+/** Title-case a slug for the bootstrapped prompt files' headings: "code-critic"
+ *  → "Code Critic". */
+function titleCase(name: string): string {
+  return name.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function systemTemplate(name: string, purpose: string): string {
+  return `# ${titleCase(name)} Agent
+
+## Purpose
+
+${purpose || 'TODO: describe what this agent does — and what it must never do.'}
+
+## Instructions
+
+- TODO: write this agent's operating instructions.
+- You inherit the operator's shell environment — call tools by bare name (never an absolute /usr/bin path).
+- Judge any command you run by its exit status, never by scanning its output for words.
+`;
+}
+
+function userTemplate(name: string): string {
+  return `# ${titleCase(name)} Task
+
+## Variables
+
+### prompt
+
+{{prompt}}
+
+## Task
+
+TODO: use \`prompt\` to do this agent's work, then emit your Report JSON.
+
+## Report
+
+Respond with ONLY valid JSON matching this agent's output model — no prose before or after.
+`;
+}
+
+/** Bootstrap the two prompt files a new agent's config REQUIRES. Never clobbers:
+ *  if a file already exists (e.g. an agent of this name was removed earlier and
+ *  its git-tracked files were left in place), its content is preserved. */
+function bootstrapPromptFiles(name: string, purpose: string): void {
+  const dir = join(resolvePromptEngineeringDir(), name);
+  mkdirSync(dir, { recursive: true });
+  const sys = join(dir, 'system.md');
+  const usr = join(dir, 'user.md');
+  if (!existsSync(sys)) writeFileSync(sys, systemTemplate(name, purpose), 'utf8');
+  if (!existsSync(usr)) writeFileSync(usr, userTemplate(name), 'utf8');
+}
+
+/** Serialize a new agent as a block-sequence item appended after the last agent,
+ *  taking the dash/child indent from the first existing item's key column (so a
+ *  non-standard indent is honoured, mirroring anchorInsertPoint's philosophy). */
+function newAgentItemSplice(doc: Document, src: string, spec: AgentCreate): Splice {
+  const items = agentSeqItems(doc);
+  const first = items[0]?.range;
+  const last = items[items.length - 1]?.range;
+  if (!first || !last) {
+    throw new RosterInputError(
+      'cannot add an agent to an empty roster — seed the first agent in sssf.config.yaml',
+    );
   }
-  const next = RosterConfigSchema.parse(reparsed.toJS());
+  const keyStart = first[0];
+  const keyLineStart = src.lastIndexOf('\n', keyStart - 1) + 1;
+  const col = keyStart - keyLineStart; // e.g. 4 for "  - name:"
+  const marker = `${' '.repeat(Math.max(0, col - 2))}- `;
+  const child = ' '.repeat(col);
 
-  // Atomic write: same-directory temp then rename, so a crash mid-write never
-  // leaves the engine a half-written config to choke on. The random suffix keeps
-  // two concurrent writes (same pid) from colliding on the temp path.
-  const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`;
-  writeFileSync(tmp, out, 'utf8');
-  renameSync(tmp, path);
+  // Build the object in a deliberate field order, keeping it minimal: only the
+  // scalars the operator set, plus the two required keys. `writes: []` makes it
+  // read-only until an operator grants writes through the editor.
+  const obj: Record<string, unknown> = { name: spec.name };
+  if (spec.coding_agent) obj.coding_agent = spec.coding_agent;
+  if (spec.model) obj.model = spec.model;
+  if (spec.thinking) obj.thinking = spec.thinking;
+  if (spec.color) obj.color = spec.color;
+  if (spec.purpose) obj.purpose = spec.purpose;
+  obj.prompt_engineering = {
+    system: `${PROMPT_ENGINEERING_PREFIX}/${spec.name}/system.md`,
+    user: `${PROMPT_ENGINEERING_PREFIX}/${spec.name}/user.md`,
+  };
+  obj.writes = [];
+
+  const lines = stringify(obj, { lineWidth: 0 }).replace(/\n+$/, '').split('\n');
+  const block = lines.map((l, i) => (i === 0 ? `${marker}${l}` : `${child}${l}`)).join('\n');
+
+  // Append after the last item's node end. The parser stretches the LAST item's
+  // nodeEnd past its terminating newline (to EOF), while a middle item's stops
+  // before it — so guard on whether we're already at a line boundary.
+  const insertAt = last[2];
+  const atLineStart = insertAt === 0 || src[insertAt - 1] === '\n';
+  return { start: insertAt, end: insertAt, text: `${atLineStart ? '' : '\n'}${block}\n` };
+}
+
+/**
+ * Add a new agent to the roster. Validates the whole rewritten config against the
+ * mirror BEFORE touching disk, then bootstraps the two required prompt files, then
+ * writes the YAML atomically — so a failure never leaves the config referencing a
+ * file that isn't there. Like every config write it spawns nothing and touches no
+ * run's trace. Returns the new roster.
+ */
+export function addAgent(spec: AgentCreate, path = resolveConfigPath()): RosterConfig {
+  const parsed = AgentCreateSchema.parse(spec);
+  const { doc, src } = parseFileDoc(path);
+  if (agentIndex(doc, parsed.name) >= 0) {
+    throw new RosterInputError(`agent "${parsed.name}" already exists in the roster`);
+  }
+  const out = applySplices(src, [newAgentItemSplice(doc, src, parsed)]);
+  const next = reparseAndValidate(out);
+  // Config is valid — create the files it now references, then commit the YAML.
+  bootstrapPromptFiles(parsed.name, parsed.purpose ?? '');
+  writeAtomic(path, out);
   return next;
+}
+
+// ── Remove an agent ───────────────────────────────────────────────────────────
+
+/**
+ * Splice out one agent's whole block: from the start of its "- " line through its
+ * terminating newline. Contiguous full-line comments directly above the item are
+ * swept out with it (its own documentation leaves too), bounded by the previous
+ * item's node end so a comment trailing the PREVIOUS agent is never taken.
+ */
+function removeAgentSplice(src: string, items: SeqItem[], idx: number): Splice {
+  const item = items[idx]!.range!;
+  const keyStart = item[0];
+  const dashLineStart = src.lastIndexOf('\n', keyStart - 1) + 1;
+
+  let start = dashLineStart;
+  const prevEnd = idx > 0 ? (items[idx - 1]!.range![2] ?? items[idx - 1]!.range![1]) : 0;
+  while (start > prevEnd) {
+    const aboveEnd = start - 1; // the '\n' terminating the line above
+    const aboveStart = src.lastIndexOf('\n', aboveEnd - 1) + 1;
+    if (aboveStart < prevEnd || !src.slice(aboveStart, aboveEnd).trim().startsWith('#')) break;
+    start = aboveStart;
+  }
+
+  // nodeEnd sits before the separating newline for a middle item; consume it so
+  // the next agent slides up. The last item's nodeEnd is already at EOF (past its
+  // newline), so there is nothing to consume and the previous newline stays.
+  let end = item[2];
+  if (src[end] === '\n') end += 1;
+  return { start, end, text: '' };
+}
+
+/**
+ * Remove an agent from the roster. Refuses to remove the LAST agent — an empty
+ * `agents:` list is both useless and a serialization edge case we decline to
+ * handle. NON-DESTRUCTIVE to the filesystem: the agent's prompt files (which are
+ * git-tracked) are left in place; an operator can delete them by hand. Returns
+ * the new roster.
+ */
+export function removeAgent(name: string, path = resolveConfigPath()): RosterConfig {
+  const parsed = AgentNameSchema.parse(name);
+  const { doc, src } = parseFileDoc(path);
+  const items = agentSeqItems(doc);
+  // Existence before the last-agent guard, so removing a name that isn't there
+  // reports "unknown agent" rather than the misleading "last agent" message.
+  const idx = agentIndex(doc, parsed);
+  if (idx < 0) throw new RosterInputError(`unknown agent "${parsed}" — not in the roster`);
+  if (items.length <= 1) {
+    throw new RosterInputError('cannot remove the last agent — the roster needs at least one');
+  }
+  return applyAndPersist(src, [removeAgentSplice(src, items, idx)], path);
 }
 
 // ── Guardrails (advisory, surfaced in the UI — never a hard block) ────────────
