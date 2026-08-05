@@ -15,7 +15,8 @@ companion to it, not a replacement.
 > phase-by-phase from the locked roadmap in [`atelier-plan.html`](atelier-plan.html). One Phase 5
 > item — **sandbox / isolated runs** (running each ADW in its own throwaway git worktree for
 > parallel-write isolation) — is still in design and **not yet implemented**, so it is
-> intentionally absent from these docs. This page will grow when it lands.
+> intentionally absent from these guides; see the [design note](design/sandbox-runs.md) for the
+> proposed shape. This page will grow when it lands.
 
 ## Start here
 
