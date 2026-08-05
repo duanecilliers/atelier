@@ -165,6 +165,25 @@ export interface AgentSession {
   last_used_at: string | null;
 }
 
+/**
+ * Per-agent last-run facts, folded across every session that agent has run in.
+ * Derived (not a row mirror) — AtelierDb.agentTelemetry keeps only the latest
+ * agent_sessions row per agent name, so the roster view can show what each
+ * configured agent actually did last (model, context occupancy, when).
+ */
+export interface AgentTelemetry {
+  agent: string;
+  /** Model / backend from the agent's most recent run (null if it's never run). */
+  last_model: string | null;
+  last_coding_agent: string | null;
+  last_used_at: string | null;
+  /** Window occupancy after that run's last turn, and the model's ceiling. */
+  context_tokens: number | null;
+  context_window: number | null;
+  /** Distinct sessions this agent has appeared in. */
+  runs: number;
+}
+
 /** run_queue.status — the control-plane lifecycle, set by the worker. */
 export type QueueStatus = 'queued' | 'claimed' | 'running' | 'done' | 'failed' | 'canceled';
 

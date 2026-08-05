@@ -48,6 +48,13 @@ column the cockpit expects exists in the live db — run it after any schema cha
 tracer adds via additive `MIGRATIONS` are marked `.optional()` in Zod and listed in the check's
 `MIGRATION_COLUMNS` so an older db still validates; a brand-new table is a hard requirement.
 
+There is a **second** Python↔TS mirror with the same discipline: `cockpit/lib/roster.ts` mirrors
+the config models in `data_types.py` (`SSSFConfig`/`AgentConfig`/`ConfigDefaults`) as Zod so the
+cockpit can read **and** validate `sssf.config.yaml` before writing it (`pnpm check:contract` does
+not cover it — it's a file, not a db table, so keep the mirror in lockstep by hand). Enum
+vocabularies shared with the editor UI live in `lib/roster-constants.ts` (no node imports, so a
+client component can import them without dragging `node:fs` into the bundle).
+
 ## Architecture
 
 ### Engine (`engine/`) — the ADW machinery
@@ -83,9 +90,17 @@ through `coding_agent: pi` will fail. Also, `pi` 0.81.1 has no `~/.pi/agent/mode
   `readonly:true`; `lib/data.ts` memoizes one connection. Rows are Zod-validated at the
   boundary. The live tail uses **rowid-cursor polling** (`/api/runs/[id]/events` +
   `components/run/LiveTail.tsx`); force-dynamic server components re-query sqlite on refresh.
-- **Write path is deliberately tiny (Phase 2 control plane).** `lib/control.ts`
-  (`AtelierControl`) is a *separate* read-write connection that touches **only** the
-  `run_queue` table — it enqueues a launch spec and flips `cancel_requested`, nothing else.
+- **Write path is deliberately tiny.** Two surfaces, both outside the trace:
+  - *Control plane (Phase 2).* `lib/control.ts` (`AtelierControl`) is a *separate* read-write
+    sqlite connection that touches **only** the `run_queue` table — it enqueues a launch spec and
+    flips `cancel_requested`, nothing else.
+  - *Roster config (Phase 4).* `lib/roster.ts` reads and writes the **file**
+    `sssf.config.yaml` (not the db) via `/api/roster`. Edits are **surgical**: it splices only the
+    changed value's byte-range in the parsed `yaml` Document (missing keys are inserted as one
+    line), so a one-field change is a one-line diff with every hand-aligned comment intact, then
+    writes atomically (temp + rename). It never spawns a process and never touches a run's trace —
+    the config is data the engine reads, and `agents.py::load_config` re-validates it via Pydantic
+    at run time.
 - Design system: the "Monolith Signal" tokens (terminal aesthetic) via `components/terminal.tsx`
   and Tailwind `os-*` classes. Navigation is centralized in `lib/nav.ts`.
 

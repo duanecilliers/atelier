@@ -29,6 +29,7 @@ import {
 import type {
   AgentSession,
   AgentStartPayload,
+  AgentTelemetry,
   CostRollup,
   Envelope,
   Event,
@@ -537,6 +538,63 @@ export class AtelierDb {
     gates.sort((a, b) => a.gate.localeCompare(b.gate));
 
     return { byGate: gates, recentFailures };
+  }
+
+  /**
+   * Per-agent last-run telemetry, keyed by agent name — the roster view's read
+   * side. Folds every agent_sessions row down to the latest per agent (by
+   * last_used_at, then created_at), plus a distinct-session count. Pure derived
+   * read; the roster's own shape comes from sssf.config.yaml (see lib/roster.ts),
+   * this only enriches it with what each agent actually did last. Returns a Map
+   * so the page can look an agent up by name in O(1).
+   */
+  agentTelemetry(): Map<string, AgentTelemetry> {
+    const ctxUsed = this.optionalColumn('agent_sessions', 'context_tokens');
+    const ctxWindow = this.optionalColumn('agent_sessions', 'context_window');
+    const rows = this.db
+      .prepare(
+        `SELECT agent, adw_id, coding_agent, model, ${ctxUsed}, ${ctxWindow},
+                created_at, last_used_at
+           FROM agent_sessions
+          ORDER BY COALESCE(last_used_at, created_at) DESC, rowid DESC`,
+      )
+      .all() as {
+      agent: string;
+      adw_id: string;
+      coding_agent: string | null;
+      model: string | null;
+      context_tokens: number | null;
+      context_window: number | null;
+      created_at: string | null;
+      last_used_at: string | null;
+    }[];
+
+    const byAgent = new Map<string, AgentTelemetry & { runIds: Set<string> }>();
+    for (const r of rows) {
+      let acc = byAgent.get(r.agent);
+      if (!acc) {
+        // First row seen for this agent is the latest (query is DESC): it sets
+        // the "last" fields; later rows only grow the distinct-session count.
+        acc = {
+          agent: r.agent,
+          last_model: r.model,
+          last_coding_agent: r.coding_agent,
+          last_used_at: r.last_used_at ?? r.created_at,
+          context_tokens: r.context_tokens,
+          context_window: r.context_window,
+          runs: 0,
+          runIds: new Set<string>(),
+        };
+        byAgent.set(r.agent, acc);
+      }
+      acc.runIds.add(r.adw_id);
+    }
+
+    const out = new Map<string, AgentTelemetry>();
+    for (const [name, { runIds, ...t }] of byAgent) {
+      out.set(name, { ...t, runs: runIds.size });
+    }
+    return out;
   }
 
   /**
