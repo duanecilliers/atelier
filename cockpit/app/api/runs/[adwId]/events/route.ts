@@ -3,7 +3,9 @@ import { getDb } from '@/lib/data';
 
 // The rowid-cursor polling contract, exactly as the engine's tracer + visualizer
 // define it: GET ?after=<rowid> returns events with rowid > after, plus the new
-// cursor to send next time. This is the live tail (Phase 5 swaps polling for SSE).
+// cursor to send next time. As of Phase 5 the cockpit's live tail streams over
+// SSE (`../stream`) instead of polling this; the route is retained as the
+// non-streaming form of the same contract (parity with the engine visualizer).
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest, { params }: { params: { adwId: string } }) {
