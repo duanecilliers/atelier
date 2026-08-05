@@ -1,0 +1,21 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { getDb } from '@/lib/data';
+
+// The rowid-cursor polling contract, exactly as the engine's tracer + visualizer
+// define it: GET ?after=<rowid> returns events with rowid > after, plus the new
+// cursor to send next time. This is the live tail (Phase 5 swaps polling for SSE).
+export const dynamic = 'force-dynamic';
+
+export async function GET(req: NextRequest, { params }: { params: { adwId: string } }) {
+  const after = Number(req.nextUrl.searchParams.get('after') ?? '0');
+  const limit = Number(req.nextUrl.searchParams.get('limit') ?? '500');
+  try {
+    const db = getDb();
+    const page = db.events(params.adwId, Number.isFinite(after) ? after : 0, limit);
+    // The run's status rides along so the client knows when to stop polling.
+    const session = db.session(params.adwId);
+    return NextResponse.json({ ...page, status: session?.status ?? null });
+  } catch (e) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+  }
+}
