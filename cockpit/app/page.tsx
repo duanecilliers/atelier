@@ -3,6 +3,7 @@ import { getDb } from '@/lib/data';
 import { Badge, Dot, Label, type BadgeTone } from '@/components/terminal';
 import { LiveRefresh } from '@/components/LiveRefresh';
 import { LiveElapsed } from '@/components/LiveElapsed';
+import { ArchiveControl } from '@/components/run/ArchiveControl';
 import { ago, compact, usd } from '@/lib/format';
 import { runsSig } from '@/lib/dashboard-signature';
 import type { SessionSummary } from '@/lib/types';
@@ -117,7 +118,7 @@ function RunRow({ session, now }: { session: SessionSummary; now: number }) {
   return (
     <Link
       href={`/runs/${session.adw_id}`}
-      className="hoverable flex items-center gap-3 border-t border-os-hairline px-4 py-3 first:border-t-0"
+      className="hoverable group flex items-center gap-3 border-t border-os-hairline px-4 py-3 first:border-t-0"
     >
       <span className="w-[42px] shrink-0">
         <Badge tone={tone}>{label}</Badge>
@@ -145,6 +146,7 @@ function RunRow({ session, now }: { session: SessionSummary; now: number }) {
           ago(session.ended_at ?? session.started_at, now)
         )}
       </span>
+      <ArchiveControl adwId={session.adw_id} variant="icon" />
     </Link>
   );
 }
