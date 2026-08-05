@@ -1,20 +1,21 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Label } from '@/components/terminal';
 import type { Event, EventType } from '@/lib/types';
 
 /**
- * The live event tail. Polls the engine's rowid-cursor contract
- * (GET /api/runs/:id/events?after=<rowid>) while the run is running, appends new
- * events newest-first, and calls router.refresh() when a STRUCTURAL event lands
- * (phase/gate/agent boundary) so the server-rendered Process Map, Envelopes and
- * Gates re-paint. When the run reaches a terminal status, it stops and does a
- * final refresh. (Phase 5 replaces this poll with SSE — same cursor, new transport.)
+ * The live event tail. Subscribes to the engine's rowid-cursor contract over
+ * SSE (GET /api/runs/:id/stream) while the run is running: the server pushes
+ * `{events,cursor,status}` frames as rows land, we append them newest-first, and
+ * call router.refresh() when a STRUCTURAL event arrives (phase/gate/agent
+ * boundary) so the server-rendered Process Map, Envelopes and Gates re-paint.
+ * The stream carries an SSE `id:` (the rowid cursor) so a dropped connection
+ * resumes via Last-Event-ID without re-sending rows. When the run reaches a
+ * terminal status the server closes the stream and we do a final refresh.
  */
 
-const POLL_MS = 800;
 const MAX_ROWS = 300;
 
 // Events that change the server-rendered panels — worth a refresh when seen.
@@ -64,33 +65,41 @@ export function LiveTail({
   // Newest-first for display; server hands them oldest-first (rowid asc).
   const [events, setEvents] = useState<Event[]>(() => [...initialEvents].reverse());
   const [status, setStatus] = useState<string | null>(initialStatus);
+  const statusRef = useRef(initialStatus);
   const cursorRef = useRef(initialCursor);
   const running = status === 'running';
 
-  const poll = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/runs/${adwId}/events?after=${cursorRef.current}`, { cache: 'no-store' });
-      if (!res.ok) return;
-      const page = (await res.json()) as { events: Event[]; cursor: number; status: string | null };
+  useEffect(() => {
+    if (!running) return;
+    // EventSource resumes from the last id it saw on reconnect; seed the very
+    // first connect with our server-rendered cursor via ?after.
+    const es = new EventSource(`/api/runs/${adwId}/stream?after=${cursorRef.current}`);
+
+    es.onmessage = (ev) => {
+      let page: { events: Event[]; cursor: number; status: string | null };
+      try {
+        page = JSON.parse(ev.data);
+      } catch {
+        return; // ignore a malformed frame; the next one retries
+      }
       if (page.events.length > 0) {
         cursorRef.current = page.cursor;
         setEvents((prev) => [...[...page.events].reverse(), ...prev].slice(0, MAX_ROWS));
         if (page.events.some((e) => e.type && STRUCTURAL.has(e.type))) router.refresh();
       }
-      if (page.status !== status) {
+      if (page.status !== statusRef.current) {
+        statusRef.current = page.status;
         setStatus(page.status);
         if (page.status !== 'running') router.refresh(); // final paint
       }
-    } catch {
-      // transient fetch error — the next tick retries
-    }
-  }, [adwId, router, status]);
+    };
 
-  useEffect(() => {
-    if (!running) return;
-    const id = setInterval(poll, POLL_MS);
-    return () => clearInterval(id);
-  }, [running, poll]);
+    // On a terminal run the server closes the stream, surfacing here as an error;
+    // EventSource otherwise auto-reconnects (resuming via Last-Event-ID). Nothing
+    // to do — the status frame already drove the final refresh.
+
+    return () => es.close();
+  }, [running, adwId, router]);
 
   return (
     <div className="mb-8">
