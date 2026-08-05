@@ -1,8 +1,10 @@
 import Link from 'next/link';
 import { getDb } from '@/lib/data';
 import { Badge, Dot, Label, type BadgeTone } from '@/components/terminal';
-import { AutoRefresh } from '@/components/AutoRefresh';
-import { ago, compact, duration, usd } from '@/lib/format';
+import { LiveRefresh } from '@/components/LiveRefresh';
+import { LiveElapsed } from '@/components/LiveElapsed';
+import { ago, compact, usd } from '@/lib/format';
+import { runsSig } from '@/lib/dashboard-signature';
 import type { SessionSummary } from '@/lib/types';
 
 // The db changes as runs happen, so never cache this view.
@@ -42,8 +44,9 @@ export default function RunsPage() {
 
   return (
     <div className="view">
-      {/* Runs kicked from the CLI appear live while any run is in flight. */}
-      <AutoRefresh active={stats.running > 0} />
+      {/* Live over SSE: a status/phase change repaints; a CLI-kicked run appears
+          from idle. Baseline is the signature of the rows we just rendered. */}
+      <LiveRefresh watch="runs" initialSig={runsSig(sessions)} />
       {/* header */}
       <p className="page-eyebrow mb-2.5 font-mono text-[9.5px] font-bold uppercase tracking-[0.32em] text-os-dim">
         {' '}
@@ -110,7 +113,6 @@ function RunRow({ session, now }: { session: SessionSummary; now: number }) {
   const status = session.status ?? 'fail';
   const tone = STATUS_TONE[status] ?? 'default';
   const label = STATUS_LABEL[status] ?? status.toUpperCase();
-  const time = status === 'running' ? duration(session.started_at, new Date(now).toISOString()) : ago(session.ended_at ?? session.started_at, now);
 
   return (
     <Link
@@ -136,7 +138,13 @@ function RunRow({ session, now }: { session: SessionSummary; now: number }) {
       <span className="w-[56px] shrink-0 text-right font-mono text-[11px] tabular-nums text-os-dim">
         {usd(session.total_cost)}
       </span>
-      <span className="w-[64px] shrink-0 text-right font-mono text-[11px] tabular-nums text-os-dim">{time}</span>
+      <span className="w-[64px] shrink-0 text-right font-mono text-[11px] tabular-nums text-os-dim">
+        {status === 'running' ? (
+          <LiveElapsed startedAt={session.started_at} serverNow={now} />
+        ) : (
+          ago(session.ended_at ?? session.started_at, now)
+        )}
+      </span>
     </Link>
   );
 }

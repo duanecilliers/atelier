@@ -1,10 +1,12 @@
 import Link from 'next/link';
 import { getDb } from '@/lib/data';
 import { Badge, Dot, Label, type BadgeTone } from '@/components/terminal';
-import { AutoRefresh } from '@/components/AutoRefresh';
+import { LiveRefresh } from '@/components/LiveRefresh';
+import { LiveElapsed } from '@/components/LiveElapsed';
 import { QueueLauncher } from '@/components/queue/QueueLauncher';
 import { CancelButton } from '@/components/queue/CancelButton';
-import { ago, duration } from '@/lib/format';
+import { ago } from '@/lib/format';
+import { queueSig } from '@/lib/dashboard-signature';
 import { readRecipes } from '@/lib/skills';
 import type { AdwSpec } from '@/lib/adws';
 import { TERMINAL_QUEUE_STATUSES, type QueueStatus, type RunQueueRow } from '@/lib/types';
@@ -20,6 +22,10 @@ const STATUS_TONE: Record<QueueStatus, BadgeTone> = {
   failed: 'err',
   canceled: 'default',
 };
+
+// The Kanban lanes, in lifecycle order: a run flows left→right as the worker
+// claims it, runs it, and it settles into a terminal lane.
+const LANES: readonly QueueStatus[] = ['queued', 'claimed', 'running', 'done', 'failed', 'canceled'];
 
 const ACTIVE: readonly QueueStatus[] = ['queued', 'claimed', 'running'];
 
@@ -55,11 +61,25 @@ export default function QueuePage() {
   const now = Date.now();
   const { queue, error } = loadQueue();
   const catalog = loadCatalog();
-  const active = queue.filter((r) => isActive(r.status)).length;
+
+  // Group into lanes once; keep enqueue order within a lane (queue() is id DESC,
+  // i.e. newest first — which reads right for a "most recent on top" column).
+  const byLane: Record<QueueStatus, RunQueueRow[]> = {
+    queued: [],
+    claimed: [],
+    running: [],
+    done: [],
+    failed: [],
+    canceled: [],
+  };
+  for (const row of queue) {
+    const status = (row.status ?? 'queued') as QueueStatus;
+    (byLane[status] ?? byLane.queued).push(row);
+  }
 
   return (
     <div className="view">
-      <AutoRefresh active={active > 0} />
+      <LiveRefresh watch="queue" initialSig={queueSig(queue)} />
       <p className="page-eyebrow mb-2.5 font-mono text-[9.5px] font-bold uppercase tracking-[0.32em] text-os-dim">
         {' '}
         Control plane
@@ -86,18 +106,12 @@ export default function QueuePage() {
             <QueueLauncher catalog={catalog} />
           </div>
 
-          <div className="mb-2">
-            <Label count={queue.length} rule>
-              Queue
-            </Label>
-          </div>
-
           {queue.length === 0 ? (
             <EmptyQueue />
           ) : (
-            <div className="border border-os-border">
-              {queue.map((row) => (
-                <QueueRow key={row.id} row={row} now={now} />
+            <div className="flex gap-px overflow-x-auto border border-os-border bg-os-border">
+              {LANES.map((lane) => (
+                <Lane key={lane} status={lane} rows={byLane[lane]} now={now} />
               ))}
             </div>
           )}
@@ -107,66 +121,80 @@ export default function QueuePage() {
   );
 }
 
-function QueueRow({ row, now }: { row: RunQueueRow; now: number }) {
+function Lane({ status, rows, now }: { status: QueueStatus; rows: RunQueueRow[]; now: number }) {
+  return (
+    <div className="flex min-w-[220px] flex-1 flex-col bg-os-bg">
+      <div className="border-b border-os-hairline px-3 pt-3">
+        <Label count={rows.length} rule>
+          {status}
+        </Label>
+      </div>
+      <div className="flex flex-col gap-2 p-2">
+        {rows.length === 0 ? (
+          <p className="px-1 py-3 font-mono text-[10.5px] text-os-dim">—</p>
+        ) : (
+          rows.map((row) => <QueueCard key={row.id} row={row} now={now} />)
+        )}
+      </div>
+    </div>
+  );
+}
+
+function QueueCard({ row, now }: { row: RunQueueRow; now: number }) {
   const status = (row.status ?? 'queued') as QueueStatus;
   const tone = STATUS_TONE[status] ?? 'default';
   const canceling = row.cancel_requested === 1 && !TERMINAL_QUEUE_STATUSES.includes(status);
-
-  // One timestamp that reads right for the state: elapsed while running, else "ago".
-  const time =
-    status === 'running'
-      ? duration(row.started_at, new Date(now).toISOString())
-      : ago(row.ended_at ?? row.started_at ?? row.enqueued_at, now);
-
   const runLink = row.adw_id ? `/runs/${row.adw_id}` : null;
 
   return (
-    <div className="flex items-center gap-3 border-t border-os-hairline px-4 py-3 first:border-t-0">
-      <span className="w-[64px] shrink-0">
+    <div className="flex flex-col gap-2 border border-os-border bg-os-surface p-3">
+      <div className="flex items-center justify-between gap-2">
         <Badge tone={tone}>
           {status === 'running' && <span className="dot warn pulse" />}
           {status}
         </Badge>
-      </span>
+        <span className="shrink-0 font-mono text-[11px] tabular-nums text-os-dim">
+          {status === 'running' ? (
+            <LiveElapsed startedAt={row.started_at} serverNow={now} />
+          ) : (
+            ago(row.ended_at ?? row.started_at ?? row.enqueued_at, now)
+          )}
+        </span>
+      </div>
 
-      <span className="w-[68px] shrink-0 font-mono text-[12px] text-os-text">
+      <div className="flex items-center gap-2 font-mono text-[10.5px] text-os-dim">
         {runLink ? (
-          <Link href={runLink} className="hover:text-os-accent">
+          <Link href={runLink} className="text-[12px] text-os-text hover:text-os-accent">
             {row.adw_id}
           </Link>
         ) : (
-          <span className="text-os-dim">—</span>
+          <span className="text-[12px] text-os-dim">—</span>
         )}
-      </span>
+        <span className="truncate">
+          {row.adw_name}
+          {row.agent ? <span className="text-os-muted"> · {row.agent}</span> : null}
+        </span>
+      </div>
 
-      <span className="hidden w-[104px] shrink-0 font-mono text-[10.5px] text-os-dim sm:block">
-        {row.adw_name}
-        {row.agent ? <span className="text-os-muted"> · {row.agent}</span> : null}
-      </span>
-
-      <span className="min-w-0 flex-1 truncate text-[12.5px] text-os-muted" title={row.request ?? ''}>
+      <p className="line-clamp-2 text-[12.5px] text-os-muted" title={row.request ?? ''}>
         {row.request ?? '—'}
-      </span>
+      </p>
 
       {row.error && (
-        <span className="hidden shrink-0 font-mono text-[10.5px] text-os-err md:inline" title={row.error}>
+        <p className="font-mono text-[10.5px] text-os-err" title={row.error}>
           {row.error}
-        </span>
+        </p>
       )}
 
-      <span className="w-[64px] shrink-0 text-right font-mono text-[11px] tabular-nums text-os-dim">
-        {time}
-      </span>
-
-      <span className="flex w-[64px] shrink-0 justify-end">
-        {isActive(status) ? (
-          canceling ? (
+      {isActive(status) && (
+        <div className="flex justify-end">
+          {canceling ? (
             <span className="font-mono text-[9.5px] uppercase tracking-[0.14em] text-os-warn">stopping…</span>
           ) : (
             <CancelButton id={row.id} />
-          )
-        ) : null}
-      </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
