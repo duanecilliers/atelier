@@ -19,7 +19,7 @@ import Database from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { z } from 'zod';
-import { ADW_NAMES } from './adws';
+import { readAdwNames } from './skills';
 import { resolveDbPath } from './db';
 import { RunQueueRowSchema } from './schemas';
 import type { QueueStatus, RunQueueRow } from './types';
@@ -46,9 +46,11 @@ CREATE TABLE IF NOT EXISTS run_queue (
   ended_at      TEXT
 );`;
 
-/** The validated shape a caller may enqueue. adw_name must be in the allowlist. */
+/** The validated shape a caller may enqueue. adw_name must name a script on disk
+ *  (the dynamic allowlist — so a cockpit-built ADW is launchable at once), the
+ *  same rule the worker re-checks before it spawns anything. */
 export const EnqueueSpecSchema = z.object({
-  adw_name: z.string().refine((n) => ADW_NAMES.has(n), 'unknown adw_name'),
+  adw_name: z.string().refine((n) => readAdwNames().has(n), 'unknown adw_name'),
   request: z.string().trim().min(1, 'request is required').max(20_000),
   agent: z.string().trim().min(1).max(64).nullable().optional(),
   config: z.string().trim().min(1).max(512).nullable().optional(),

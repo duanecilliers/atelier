@@ -1,12 +1,15 @@
 /**
- * The launchable ADW catalog + roster — what the cockpit is allowed to enqueue.
+ * Client-safe ADW helpers for the launcher — the light NL→ADW inference and the
+ * agent roster for adw_prompt's `--agent`.
  *
- * This is an allowlist by construction: an enqueue whose adw_name is not in
- * ADW_NAMES is rejected before it ever reaches the db, and the worker validates
- * the name a second time against the actual scripts on disk. Mirrors the ADWs
- * exposed in the engine justfile; Phase 4's roster editor will make it dynamic.
+ * The launchable catalog and the enqueue allowlist are BOTH read live from disk
+ * now (Phase 4): the queue page builds the launcher menu from `readRecipes()` and
+ * `lib/control.ts` validates enqueue against `readAdwNames()` — the same on-disk
+ * rule the worker re-checks. So a cockpit-built ADW is launchable at once. This
+ * module stays free of `node:fs` on purpose: QueueLauncher is a client component.
  */
 
+/** One entry in the launcher's ADW menu (built from a Recipe on the server). */
 export interface AdwSpec {
   /** Script stem in engine/adws/, e.g. "adw_scout". Becomes the worker's argv. */
   name: string;
@@ -15,17 +18,6 @@ export interface AdwSpec {
   /** True only for adw_prompt — the one ADW that takes a --agent. */
   usesAgent: boolean;
 }
-
-export const ADW_CATALOG: readonly AdwSpec[] = [
-  { name: 'adw_prompt', label: 'Prompt', blurb: 'One agent, one prompt — the smallest run.', usesAgent: true },
-  { name: 'adw_scout', label: 'Scout', blurb: 'Read-only recon. Changes nothing.', usesAgent: false },
-  { name: 'adw_plan', label: 'Plan', blurb: 'Planner drafts a plan; nothing is built.', usesAgent: false },
-  { name: 'adw_plan_build', label: 'Plan + Build', blurb: 'Plan, build, commit.', usesAgent: false },
-  { name: 'adw_plan_build_test', label: 'SDLC', blurb: 'Plan, build, test, commit.', usesAgent: false },
-  { name: 'adw_simple_sdlc', label: 'Full SDLC', blurb: 'Plan, build, test, review, document.', usesAgent: false },
-] as const;
-
-export const ADW_NAMES: ReadonlySet<string> = new Set(ADW_CATALOG.map((a) => a.name));
 
 /**
  * The roster from sssf.config.yaml. Only adw_prompt uses it (to pick which agent

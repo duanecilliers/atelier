@@ -5,6 +5,8 @@ import { AutoRefresh } from '@/components/AutoRefresh';
 import { QueueLauncher } from '@/components/queue/QueueLauncher';
 import { CancelButton } from '@/components/queue/CancelButton';
 import { ago, duration } from '@/lib/format';
+import { readRecipes } from '@/lib/skills';
+import type { AdwSpec } from '@/lib/adws';
 import { TERMINAL_QUEUE_STATUSES, type QueueStatus, type RunQueueRow } from '@/lib/types';
 
 // The queue changes as the worker drains it, so never cache this view.
@@ -33,9 +35,26 @@ function loadQueue(): { queue: RunQueueRow[]; error: string | null } {
   }
 }
 
+/** The launcher menu, built live from the ADWs on disk (smallest chain first, as
+ *  readRecipes() sorts them). Empty if the dir can't be read — the launcher then
+ *  disables itself rather than crash the whole queue view. */
+function loadCatalog(): AdwSpec[] {
+  try {
+    return readRecipes().map((r) => ({
+      name: r.id,
+      label: r.name,
+      blurb: r.tagline,
+      usesAgent: r.agents === null,
+    }));
+  } catch {
+    return [];
+  }
+}
+
 export default function QueuePage() {
   const now = Date.now();
   const { queue, error } = loadQueue();
+  const catalog = loadCatalog();
   const active = queue.filter((r) => isActive(r.status)).length;
 
   return (
@@ -64,7 +83,7 @@ export default function QueuePage() {
       ) : (
         <>
           <div className="mb-6">
-            <QueueLauncher />
+            <QueueLauncher catalog={catalog} />
           </div>
 
           <div className="mb-2">

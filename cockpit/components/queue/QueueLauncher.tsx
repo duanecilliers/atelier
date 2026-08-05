@@ -3,15 +3,18 @@
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ADW_CATALOG, AGENT_ROSTER, inferAdw } from '@/lib/adws';
+import { AGENT_ROSTER, inferAdw, type AdwSpec } from '@/lib/adws';
 
 /**
  * The Conductor dock — the cockpit's launcher. Describe the work; Atelier infers
  * the ADW from the text (light NL), and you can override the pick. Submitting
  * POSTs a launch spec to /api/queue — it enqueues a run_queue row, it never
  * spawns anything. The worker (just worker) drains the row into a real run.
+ *
+ * `catalog` is built live from the ADWs on disk (see app/queue/page.tsx), so an
+ * ADW composed in /skills shows up here without a code change.
  */
-export function QueueLauncher() {
+export function QueueLauncher({ catalog }: { catalog: AdwSpec[] }) {
   const router = useRouter();
   const [request, setRequest] = useState('');
   const [manualAdw, setManualAdw] = useState<string | null>(null);
@@ -20,10 +23,11 @@ export function QueueLauncher() {
   const [error, setError] = useState<string | null>(null);
   const [launched, setLaunched] = useState<{ id: number; adw_id: string } | null>(null);
 
-  // The inferred ADW follows the text until the operator overrides it.
+  // The inferred ADW follows the text until the operator overrides it. Fall back
+  // to the first catalog entry if inference names an ADW not on disk.
   const inferred = useMemo(() => inferAdw(request), [request]);
   const adwName = manualAdw ?? inferred;
-  const spec = ADW_CATALOG.find((a) => a.name === adwName) ?? ADW_CATALOG[0]!;
+  const spec = catalog.find((a) => a.name === adwName) ?? catalog[0];
 
   async function launch() {
     const trimmed = request.trim();
@@ -38,7 +42,7 @@ export function QueueLauncher() {
         body: JSON.stringify({
           adw_name: adwName,
           request: trimmed,
-          agent: spec.usesAgent ? agent : null,
+          agent: spec?.usesAgent ? agent : null,
           requested_by: 'cockpit',
         }),
       });
@@ -88,7 +92,7 @@ export function QueueLauncher() {
               onChange={(e) => setManualAdw(e.target.value)}
               className="min-w-[150px] border border-os-border bg-os-bg px-2 py-[7px] font-mono text-[12px] text-os-text outline-none focus:border-os-border-strong"
             >
-              {ADW_CATALOG.map((a) => (
+              {catalog.map((a) => (
                 <option key={a.name} value={a.name}>
                   {a.label}
                 </option>
@@ -96,7 +100,7 @@ export function QueueLauncher() {
             </select>
           </Field>
 
-          {spec.usesAgent && (
+          {spec?.usesAgent && (
             <Field label="Agent">
               <select
                 value={agent}
@@ -113,7 +117,7 @@ export function QueueLauncher() {
           )}
 
           <div className="min-w-0 flex-1 self-center pt-4 font-mono text-[11px] text-os-dim">
-            {spec.blurb}
+            {spec?.blurb}
             {!manualAdw && request.trim() && (
               <span className="ml-1.5 text-os-muted">· inferred</span>
             )}
@@ -121,7 +125,7 @@ export function QueueLauncher() {
 
           <button
             onClick={launch}
-            disabled={busy || !request.trim()}
+            disabled={busy || !request.trim() || !spec}
             className="rounded-sm-t border border-[var(--accent-line)] bg-[var(--accent-soft)] px-4 py-[7px] font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-os-accent transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {busy ? 'Launching…' : 'Launch ⌘⏎'}
