@@ -137,3 +137,18 @@ export function readRecipes(dir = resolveAdwsDir()): Recipe[] {
   const recipes = files.map((f) => parseRecipe(f, readFileSync(join(dir, f), 'utf8')));
   return recipes.sort((a, b) => a.steps.length - b.steps.length || a.name.localeCompare(b.name));
 }
+
+/**
+ * The launchable ADW stems on disk, e.g. `adw_scout`. This is the dynamic
+ * allowlist: it mirrors the worker's own rule (any `adw_*.py` except the
+ * drainer), so an ADW built through the cockpit is enqueueable the moment its
+ * file exists — no static catalog to update. `make_adw.py` is excluded for free
+ * (it lacks the `adw_` prefix). Returns an empty set if the dir is missing.
+ */
+export function readAdwNames(dir = resolveAdwsDir()): Set<string> {
+  if (!existsSync(dir)) return new Set();
+  const names = readdirSync(dir)
+    .filter((f) => f.startsWith('adw_') && f.endsWith('.py') && f !== 'adw_worker.py')
+    .map((f) => basename(f, '.py'));
+  return new Set(names);
+}
