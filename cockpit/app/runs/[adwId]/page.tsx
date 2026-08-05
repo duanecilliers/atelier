@@ -1,13 +1,14 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getDb } from '@/lib/data';
-import { Badge, type BadgeTone } from '@/components/terminal';
+import { Badge, type BadgeTone, Stat } from '@/components/terminal';
 import { ProcessMap } from '@/components/run/ProcessMap';
+import { ModelStack } from '@/components/run/ModelStack';
 import { EnvelopePanel } from '@/components/run/EnvelopePanel';
 import { GatePanel } from '@/components/run/GatePanel';
 import { LiveTail } from '@/components/run/LiveTail';
 import { compact, duration, usd } from '@/lib/format';
-import type { Envelope, Event, GateResult, SessionDetail } from '@/lib/types';
+import type { Envelope, Event, GateResult, PhaseCost, SessionDetail } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,6 +18,7 @@ type Loaded = {
   detail: SessionDetail;
   envelopes: Envelope[];
   gates: GateResult[];
+  modelStack: PhaseCost[];
   events: Event[];
   cursor: number;
 };
@@ -28,7 +30,14 @@ function load(adwId: string): { data: Loaded | null; error: string | null; missi
     if (!detail) return { data: null, error: null, missing: true };
     const page = db.events(adwId, 0, 1000);
     return {
-      data: { detail, envelopes: db.envelopes(adwId), gates: db.gates(adwId), events: page.events, cursor: page.cursor },
+      data: {
+        detail,
+        envelopes: db.envelopes(adwId),
+        gates: db.gates(adwId),
+        modelStack: db.runModelStack(adwId),
+        events: page.events,
+        cursor: page.cursor,
+      },
       error: null,
       missing: false,
     };
@@ -51,7 +60,7 @@ export default function RunDetailPage({ params }: { params: { adwId: string } })
     );
   }
 
-  const { detail, envelopes, gates, events, cursor } = data;
+  const { detail, envelopes, gates, modelStack, events, cursor } = data;
   const { session, phases, agents, usage } = detail;
   const status = session.status ?? 'fail';
 
@@ -78,6 +87,8 @@ export default function RunDetailPage({ params }: { params: { adwId: string } })
       <ProcessMap phases={phases} agents={agents} />
 
       {agents.length > 0 && <Agents agents={agents} />}
+
+      <ModelStack stack={modelStack} />
 
       <EnvelopePanel envelopes={envelopes} />
       <GatePanel gates={gates} />
@@ -113,15 +124,6 @@ function Agents({ agents }: { agents: SessionDetail['agents'] }) {
           </div>
         ))}
       </div>
-    </div>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="bg-os-bg px-4 py-3">
-      <div className="font-mono text-[8.5px] uppercase tracking-[0.16em] text-os-dim">{label}</div>
-      <div className="mt-1 font-mono text-[20px] font-bold tabular-nums text-os-text">{value}</div>
     </div>
   );
 }
