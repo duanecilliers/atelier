@@ -31,7 +31,7 @@ export const NAV_OPERATE: NavItem[] = [
 // The factory: the agents that propose and the skills they draw on.
 export const NAV_FACTORY: NavItem[] = [
   { href: '/agents', label: 'Agents', icon: Bot, live: true }, // Phase 4 — roster view + editor
-  { href: '/skills', label: 'Skills', icon: Sparkles }, // Phase 4
+  { href: '/skills', label: 'Skills', icon: Sparkles, live: true }, // Phase 4 — cookbook (read-only)
 ];
 
 // How you measure it: the deterministic gates and what each run cost.
