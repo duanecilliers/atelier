@@ -165,6 +165,42 @@ export interface AgentSession {
   last_used_at: string | null;
 }
 
+/** run_queue.status — the control-plane lifecycle, set by the worker. */
+export type QueueStatus = 'queued' | 'claimed' | 'running' | 'done' | 'failed' | 'canceled';
+
+/** Terminal queue statuses — a row here is finished and won't move again. */
+export const TERMINAL_QUEUE_STATUSES: readonly QueueStatus[] = ['done', 'failed', 'canceled'];
+
+/**
+ * run_queue — the Phase 2 control seam. The cockpit INSERTs a launch spec and
+ * flips cancel_requested; the worker (adw_worker.py) drains it, spawns the ADW,
+ * and owns pid/status/exit_code. The cockpit never spawns a process itself.
+ */
+export interface RunQueueRow {
+  id: number;
+  /** Minted at enqueue so the cockpit can deep-link to the run before it starts. */
+  adw_id: string | null;
+  /** The ADW script to run, e.g. "adw_scout". */
+  adw_name: string | null;
+  /** adw_prompt's --agent; null for multi-agent ADWs. */
+  agent: string | null;
+  request: string | null;
+  /** Roster config path; null = the worker's default. */
+  config: string | null;
+  status: QueueStatus | null;
+  requested_by: string | null;
+  /** SQLite integer boolean — the cockpit sets this to ask the worker to stop. */
+  cancel_requested: number | null;
+  /** The worker-spawned adw pid (also tracked in processes). */
+  pid: number | null;
+  exit_code: number | null;
+  error: string | null;
+  enqueued_at: string | null;
+  claimed_at: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+}
+
 // ── payload_json shapes ──────────────────────────────────────────────────────
 // events.payload_json is stored as a string. These are the parsed shapes; every
 // field is optional because the tracer writes what the coding agent reported.

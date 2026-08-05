@@ -111,6 +111,31 @@ export const AgentSessionRowSchema = z.object({
 });
 
 /**
+ * run_queue — the Phase 2 control seam. The one table the cockpit WRITES (via a
+ * narrow read-write connection): it INSERTs a launch spec and, to stop a run,
+ * sets cancel_requested. The worker (engine/adws/adw_worker.py) drains it and
+ * owns every other column. DDL source: engine/adws/adw_modules/queue.py.
+ */
+export const RunQueueRowSchema = z.object({
+  id: z.number().int(),
+  adw_id: z.string().nullable(),
+  adw_name: z.string().nullable(),
+  agent: z.string().nullable(),
+  request: z.string().nullable(),
+  config: z.string().nullable(),
+  status: z.string().nullable(),
+  requested_by: z.string().nullable(),
+  cancel_requested: sqliteBool,
+  pid: z.number().int().nullable(),
+  exit_code: z.number().int().nullable(),
+  error: z.string().nullable(),
+  enqueued_at: z.string().nullable(),
+  claimed_at: z.string().nullable(),
+  started_at: z.string().nullable(),
+  ended_at: z.string().nullable(),
+});
+
+/**
  * The column contract, table → column names, derived straight from the schemas
  * above so it can never disagree with them. scripts/check-contract.ts asserts
  * every one of these columns exists in the live sssf.db.
@@ -123,6 +148,7 @@ export const TABLE_COLUMNS = {
   gate_results: Object.keys(GateResultRowSchema.shape),
   processes: Object.keys(ProcessRowSchema.shape),
   agent_sessions: Object.keys(AgentSessionRowSchema.shape),
+  run_queue: Object.keys(RunQueueRowSchema.shape),
 } as const satisfies Record<string, string[]>;
 
 export type TableName = keyof typeof TABLE_COLUMNS;
