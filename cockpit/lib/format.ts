@@ -39,3 +39,46 @@ export function ago(iso: string | null, now: number): string {
   if (h < 24) return `${h}h ago`;
   return `${Math.round(h / 24)}d ago`;
 }
+
+/** ISO → epoch ms, or NaN. The one place the waterfall parses timestamps. */
+export function tsMs(iso: string | null | undefined): number {
+  if (!iso) return NaN;
+  return new Date(iso).getTime();
+}
+
+/** A duration as a compact offset label for a time axis: "0s" / "12s" / "3m" / "1h4m". */
+export function fmtOffset(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return `${h}h${m % 60}m`;
+}
+
+/**
+ * `count` evenly-spaced axis ticks across a span, each with its left-% and an
+ * offset label. Linear — the waterfall's blocks carry the exact geometry; these
+ * are just reading guides.
+ */
+export function axisTicks(spanMs: number, count: number): { pct: number; label: string }[] {
+  const n = Math.max(2, count);
+  const out: { pct: number; label: string }[] = [];
+  for (let i = 0; i < n; i++) {
+    const frac = i / (n - 1);
+    out.push({ pct: frac * 100, label: fmtOffset(frac * spanMs) });
+  }
+  return out;
+}
+
+/**
+ * Dollars to four places — the per-component cost table runs to fractions of a
+ * cent, where usd()'s two-place rounding would read as "$0.00". "<$0.0001" keeps
+ * a real-but-tiny cost from rendering as nothing.
+ */
+export function usd4(n: number | null | undefined): string {
+  if (n == null || n === 0) return '$0';
+  if (n < 0.0001) return '<$0.0001';
+  return `$${n.toFixed(4)}`;
+}
