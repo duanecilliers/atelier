@@ -8,14 +8,15 @@ This is the *only* thing that turns a queued row into a running ADW. The cockpit
 enqueues rows and flips cancel flags; it never spawns a process. The worker
 builds the exact argv a human would type at the CLI —
 
-    uv run engine/adws/<adw_name>.py --config <cfg> --adw-id <id> [--agent <a>] "<request>"
+    uv run <adws>/<adw_name>.py --config <cfg> --adw-id <id> [--agent <a>] "<request>"
 
 — so a UI-launched run is byte-for-byte identical to a CLI one: same trace, same
 acceptance, same process rows. The worker adds nothing to a run except starting
-and (on request) stopping it.
+and (on request) stopping it. `<adws>` is this worker's own directory —
+engine/adws/ when Atelier self-hosts, adws/ in a stamped repo.
 
 Usage:
-    uv run engine/adws/adw_worker.py [--config <cfg>] [--concurrency N] [--poll 1.0] [--once]
+    uv run <adws>/adw_worker.py [--config <cfg>] [--concurrency N] [--poll 1.0] [--once]
 
 Run it from the repo (git) root — the same cwd every ADW expects, so config
 paths and `writes:` allowlists resolve where agents actually write.
@@ -34,16 +35,55 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from adw_modules import agents, queue
+from adw_modules import agents, git_helper, queue
 from adw_modules.utils import ensure_dir
 
-# The worker file is engine/adws/adw_worker.py; the repo root is two up. Every
-# ADW is launched with cwd=REPO_ROOT so its relative paths resolve identically
-# to a CLI invocation.
-REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CONFIG = "engine/adws/adw_sssf_config/sssf.config.yaml"
+# The repo (git) root every ADW is launched in, so its relative config paths and
+# `writes:` allowlists resolve identically to a CLI invocation. Resolved from cwd
+# via `git rev-parse`, NEVER from Path(__file__): when `adws/` is a symlink into a
+# shared dir (a git worktree sharing one engine), __file__ resolves through the
+# symlink to the TARGET and its parent is the wrong repo — but cwd is the worktree
+# the worker was launched in, which is the root its runs must commit to.
+REPO_ROOT = git_helper.repo_root()
 
-# An adw_name only ever names a script in engine/adws/. Validate hard: the row
+# Candidate roster locations, repo-root-relative, most-specific first: a stamped
+# repo keeps its engine at adws/, Atelier self-hosts at engine/adws/. The default
+# is the first that exists — layout-agnostic and, being cwd-relative (not
+# __file__), correct inside a symlinked worktree. Only a fallback: a queued row
+# usually carries its own config.
+CONFIG_CANDIDATES = (
+    "adws/adw_sssf_config/sssf.config.yaml",
+    "engine/adws/adw_sssf_config/sssf.config.yaml",
+)
+
+
+def default_config() -> str:
+    for candidate in CONFIG_CANDIDATES:
+        if (REPO_ROOT / candidate).is_file():
+            return candidate
+    return CONFIG_CANDIDATES[0]
+
+
+DEFAULT_CONFIG = default_config()
+
+
+def script_for(adw_name: str, config: str) -> Path | None:
+    """Locate an ADW script from the config path, or None if it isn't a file.
+
+    The scripts live beside the roster's own directory —
+    `<adws>/adw_sssf_config/<file>` — so `<adws>` is the config's grandparent and
+    every adw_*.py is a sibling of the roster dir. Derived from the config (a
+    relative path resolves against the repo root, cwd for the run), never from
+    __file__: a symlinked `adws/` then stays in the worktree's namespace instead
+    of jumping to the symlink target.
+    """
+    cfg_path = Path(config)
+    if not cfg_path.is_absolute():
+        cfg_path = REPO_ROOT / cfg_path
+    script = cfg_path.parent.parent / f"{adw_name}.py"
+    return script if script.is_file() else None
+
+# An adw_name only ever names a script in the adws dir. Validate hard: the row
 # comes from the cockpit, and this string becomes an argv element.
 ADW_NAME_RE = re.compile(r"^adw_[a-z0-9_]+$")
 
@@ -79,10 +119,10 @@ def build_argv(row: sqlite3.Row, worker_config: str) -> list[str] | None:
     adw_name = (row["adw_name"] or "").strip()
     if not ADW_NAME_RE.match(adw_name):
         return None
-    script = REPO_ROOT / "engine" / "adws" / f"{adw_name}.py"
-    if not script.is_file():
-        return None
     config = row["config"] or worker_config
+    script = script_for(adw_name, config)
+    if script is None:
+        return None
     argv = ["uv", "run", str(script), "--config", config, "--adw-id", row["adw_id"]]
     if adw_name in AGENT_ARG_ADWS and row["agent"]:
         argv += ["--agent", row["agent"]]
