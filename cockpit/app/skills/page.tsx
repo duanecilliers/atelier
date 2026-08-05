@@ -1,5 +1,6 @@
 import { readRecipes, type Recipe } from '@/lib/skills';
 import { Badge, Label } from '@/components/terminal';
+import { RecipeBuilder } from '@/components/skills/RecipeBuilder';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,23 +36,29 @@ export default function SkillsPage() {
         <pre className="whitespace-pre-wrap border border-os-err/40 p-4 font-mono text-[11.5px] text-os-muted">
           {error}
         </pre>
-      ) : recipes.length === 0 ? (
-        <div className="border border-dashed border-os-border-strong px-4 py-5 font-mono text-[11.5px] text-os-dim">
-          No recipes found. The cockpit reads them from the engine&apos;s <code>adws/</code> directory
-          — check <code>SSSF_ADWS_DIR</code>.
-        </div>
       ) : (
         <>
-          <div className="mb-3">
-            <Label count={recipes.length} rule>
-              Recipes
-            </Label>
-          </div>
-          <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-2">
-            {recipes.map((r) => (
-              <RecipeCard key={r.id} recipe={r} />
-            ))}
-          </div>
+          <RecipeBuilder existingNames={recipes.map((r) => r.id)} />
+
+          {recipes.length === 0 ? (
+            <div className="border border-dashed border-os-border-strong px-4 py-5 font-mono text-[11.5px] text-os-dim">
+              No recipes found. The cockpit reads them from the engine&apos;s <code>adws/</code> directory
+              — check <code>SSSF_ADWS_DIR</code>.
+            </div>
+          ) : (
+            <>
+              <div className="mb-3">
+                <Label count={recipes.length} rule>
+                  Recipes
+                </Label>
+              </div>
+              <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-2">
+                {recipes.map((r) => (
+                  <RecipeCard key={r.id} recipe={r} />
+                ))}
+              </div>
+            </>
+          )}
         </>
       )}
     </div>
