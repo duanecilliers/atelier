@@ -5,6 +5,7 @@ import { useRouter, usePathname } from 'next/navigation';
 import { NAV_OPERATE, NAV_FACTORY, NAV_OBSERVE, type NavItem } from '@/lib/nav';
 import { projectHref } from '@/lib/project-url';
 import { AtelierMark } from '@/components/AtelierMark';
+import { WorkerFooter } from '@/components/WorkerFooter';
 
 /** The switcher UX for the shell (Part E). id + name only — the registry's roots
  *  never cross to the client. Navigating swaps to the other project's runs view. */
@@ -105,9 +106,7 @@ export function Sidebar({ projects, projectId }: { projects: ProjectOption[]; pr
         <NavGroup title="Observe" items={NAV_OBSERVE} pathname={pathname} projectId={projectId} />
       </nav>
       <div className="flex flex-col gap-2 border-t border-os-border px-[18px] py-3.5">
-        <div className="flex items-center gap-2 whitespace-nowrap font-mono text-[10px] text-os-muted">
-          <span className="dot ok pulse" /> reading sssf.db
-        </div>
+        <WorkerFooter projectId={projectId} />
         <div className="whitespace-nowrap font-mono text-[10px] text-os-dim">
           sqlite · WAL · read-only
         </div>

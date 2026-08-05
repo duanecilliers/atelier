@@ -136,6 +136,20 @@ export const RunQueueRowSchema = z.object({
 });
 
 /**
+ * workers — the per-project liveness heartbeat (Part F). The worker
+ * (engine/adws/adw_worker.py) upserts a row every poll; the cockpit only reads
+ * it. DDL source: engine/adws/adw_modules/workers.py. All columns ship in the
+ * CREATE (not migration-added), so none are optional — a fresh `workers` table
+ * is a hard requirement of check:contract.
+ */
+export const WorkerRowSchema = z.object({
+  host: z.string().nullable(),
+  pid: z.number().int().nullable(),
+  started_at: z.string().nullable(),
+  last_seen_at: z.string().nullable(),
+});
+
+/**
  * The column contract, table → column names, derived straight from the schemas
  * above so it can never disagree with them. scripts/check-contract.ts asserts
  * every one of these columns exists in the live sssf.db.
@@ -149,6 +163,7 @@ export const TABLE_COLUMNS = {
   processes: Object.keys(ProcessRowSchema.shape),
   agent_sessions: Object.keys(AgentSessionRowSchema.shape),
   run_queue: Object.keys(RunQueueRowSchema.shape),
+  workers: Object.keys(WorkerRowSchema.shape),
 } as const satisfies Record<string, string[]>;
 
 export type TableName = keyof typeof TABLE_COLUMNS;

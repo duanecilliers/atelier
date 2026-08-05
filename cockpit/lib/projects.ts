@@ -19,7 +19,8 @@
  * path shapes: the `resolve*` functions in db.ts / roster.ts / skills.ts delegate
  * here (see `envProjectPaths`).
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 
@@ -36,6 +37,10 @@ export const ProjectSchema = z.object({
   name: z.string().trim().min(1).max(120),
   root: z.string().trim().min(1),
   adwsSubdir: z.string().trim().min(1),
+  /** Part F — the cockpit's "start worker" intent. The supervisor
+   *  (adw_worker.py --supervise) reads this and keeps one worker draining this
+   *  project's queue. Optional: absent ≡ false (no worker desired). */
+  workerDesired: z.boolean().optional(),
 });
 export type Project = z.infer<typeof ProjectSchema>;
 
@@ -180,4 +185,49 @@ export function pathsForProject(projectId?: string): ProjectPaths {
   const project = projectId ? reg.find((p) => p.id === projectId) : reg[0];
   if (!project) throw new Error(`unknown project '${projectId}'`);
   return composeProjectPaths(project);
+}
+
+/** A rejected worker-intent write the API maps to 400 — no registry file (env
+ *  fallback has nothing to write) or an unknown project id. */
+export class WorkerIntentError extends Error {}
+
+/** Atomic JSON write: same-directory temp then rename, so a crash mid-write can
+ *  never leave a half-written registry (mirrors roster.ts's writeAtomic). */
+function writeRegistryAtomic(path: string, data: unknown): void {
+  const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`;
+  writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+  renameSync(tmp, path);
+}
+
+/**
+ * Flip a project's `workerDesired` flag in atelier.projects.json — the cockpit's
+ * "start/stop worker" intent. Like enqueue()/requestCancel(), it only writes
+ * intent; the supervisor disposes (spawns/stops the worker). The cockpit still
+ * never spawns a process — this reuses the determinism spine, one level up.
+ *
+ * Mutates the RAW parsed JSON (not the Zod-parsed projection) so any extra keys
+ * the user keeps in the file survive the round-trip; validates the shape first.
+ * Requires a registry file: env-fallback mode has no file to write, so worker
+ * control is a registry-mode feature (WorkerIntentError → 400).
+ */
+export function setWorkerDesired(projectId: string, desired: boolean): { id: string; workerDesired: boolean } {
+  const path = registryPath();
+  if (!existsSync(path)) {
+    throw new WorkerIntentError(
+      'worker control requires a projects registry (atelier.projects.json); env-fallback mode has no registry to write intent into',
+    );
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (e) {
+    throw new Error(`atelier.projects.json is not valid JSON (${path}): ${(e as Error).message}`);
+  }
+  ProjectsFileSchema.parse(raw); // validate the whole file before mutating it
+  const entries = raw as Array<Record<string, unknown>>;
+  const entry = entries.find((p) => p?.id === projectId);
+  if (!entry) throw new WorkerIntentError(`unknown project '${projectId}'`);
+  entry.workerDesired = desired;
+  writeRegistryAtomic(path, entries);
+  return { id: projectId, workerDesired: desired };
 }
