@@ -172,6 +172,38 @@ class QualityResult(BaseModel):
     artifacts: list[str] = Field(default_factory=list)
 
 
+class QualityCheckConfig(BaseModel):
+    """One quality command as written in sssf.config.yaml's `quality:` block.
+
+    A quality command is data, not code: the invocation is the only per-repo
+    thing about it, so it lives in the config the operator already owns and
+    never in the managed `quality.py`. The map KEY supplies the name (and
+    `test` is the one the deterministic test phase runs alone); `timeout` is in
+    seconds; `area`/`operation` are optional trace classifiers that default to
+    the common case. Omit a block to skip it; map order is run order.
+    """
+
+    argv: list[str]
+    timeout: int = 120
+    area: QualityArea = "backend"
+    operation: QualityOperation = "build"
+
+    @field_validator("argv")
+    @classmethod
+    def _argv_nonempty(cls, value: list[str]) -> list[str]:
+        """A check with no command is a config typo, not a no-op — say so early."""
+        if not value or not value[0].strip():
+            raise ValueError(
+                "a quality check needs a non-empty argv (the command to run) — "
+                "e.g. argv: [\"uv\", \"run\", \"pytest\", \"-q\"]")
+        return value
+
+    def to_spec(self, name: str) -> QualityCheckSpec:
+        """The runnable spec quality._run() executes; the map key is the name."""
+        return QualityCheckSpec(name=name, area=self.area, operation=self.operation,
+                                argv=self.argv, timeout_seconds=self.timeout)
+
+
 # ── Change capture (git diff, deterministic) ─────────────────────────────────
 
 class ChangeCapture(BaseModel):
@@ -346,6 +378,11 @@ class ObservabilityConfig(BaseModel):
 class SSSFConfig(BaseModel):
     defaults: ConfigDefaults = Field(default_factory=ConfigDefaults)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    # The deterministic quality commands (test/lint/typecheck/…), keyed by name.
+    # Empty by default: a stamped repo declares its own here rather than editing
+    # managed code. See adw_modules/quality.py, which builds its block list from
+    # this map instead of hardcoding it.
+    quality: dict[str, QualityCheckConfig] = Field(default_factory=dict)
     agents: list[AgentConfig] = Field(default_factory=list)
 
 

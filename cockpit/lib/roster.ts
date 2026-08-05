@@ -23,6 +23,8 @@ import { parseDocument, stringify, type Document } from 'yaml';
 import { z } from 'zod';
 import {
   CODING_AGENTS,
+  QUALITY_AREAS,
+  QUALITY_OPERATIONS,
   THINKING_LEVELS,
   validateAgentName,
   validateToolName,
@@ -99,9 +101,22 @@ const ObservabilitySchema = z.object({
   poll_ms: z.number().default(500),
 });
 
+// Mirror of QualityCheckConfig: one deterministic quality command. The map key
+// (in the parent record) supplies the name; `timeout` is seconds; area/operation
+// are optional trace classifiers that default in the engine. `argv` must be a
+// non-empty list — a shell string would be a quoting/injection bug.
+const QualityCheckSchema = z.object({
+  argv: z.array(z.string()).min(1),
+  timeout: z.number().default(120),
+  area: z.enum(QUALITY_AREAS).default('backend'),
+  operation: z.enum(QUALITY_OPERATIONS).default('build'),
+});
+
 export const RosterConfigSchema = z.object({
   defaults: ConfigDefaultsSchema.default({}),
   observability: ObservabilitySchema.default({}),
+  // A map of name → command; empty by default. Mirrors SSSFConfig.quality.
+  quality: z.record(z.string(), QualityCheckSchema).default({}),
   agents: z.array(AgentConfigSchema).default([]),
 });
 
