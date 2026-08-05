@@ -26,8 +26,8 @@ const REQ_ZONE_PCT = 14;
 
 const KIND_LABEL: Record<PhaseKind, string> = { engineer: 'engineer', code: 'code', agent: 'agent' };
 
-// Block border/background by STATUS — the same traffic-light mapping ProcessMap
-// uses, so the two views read identically.
+// Block border/background by STATUS — the traffic-light rule (color means status),
+// so a block reads the same as the run-list phase dots.
 const BLOCK_STATUS: Record<string, string> = {
   success: 'border-[color-mix(in_oklab,var(--ok)_45%,var(--border))]',
   running:
