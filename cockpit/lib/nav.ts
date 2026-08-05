@@ -1,0 +1,50 @@
+/**
+ * Single source of truth for Atelier's navigation. The Sidebar renders these
+ * groups in order; the CommandPalette derives its digit (1–9) shortcuts from the
+ * same visible order, so the two can never drift.
+ *
+ * Re-pointed from FounderOS's business views to the engine concepts from the
+ * plan's concept map (§03): a Run is one ADW session; the Process Map lives
+ * inside a run's detail; Agents/Skills are the factory; Gates/Cost are how you
+ * measure it. `live: false` marks a view that ships in a later phase — the
+ * Sidebar still lists it (the IA is real) but tags it so nothing pretends to
+ * work before it does.
+ */
+import {
+  Activity,
+  ListChecks,
+  Bot,
+  Sparkles,
+  ShieldCheck,
+  Receipt,
+  type LucideIcon,
+} from 'lucide-react';
+
+export type NavItem = { href: string; label: string; icon: LucideIcon; live?: boolean };
+
+// The runs and the queue that feeds them.
+export const NAV_OPERATE: NavItem[] = [
+  { href: '/', label: 'Runs', icon: Activity, live: true },
+  { href: '/queue', label: 'Queue', icon: ListChecks }, // Phase 2 — control plane
+];
+
+// The factory: the agents that propose and the skills they draw on.
+export const NAV_FACTORY: NavItem[] = [
+  { href: '/agents', label: 'Agents', icon: Bot }, // Phase 1+
+  { href: '/skills', label: 'Skills', icon: Sparkles }, // Phase 4
+];
+
+// How you measure it: the deterministic gates and what each run cost.
+export const NAV_OBSERVE: NavItem[] = [
+  { href: '/gates', label: 'Gates', icon: ShieldCheck }, // Phase 3
+  { href: '/cost', label: 'Cost', icon: Receipt }, // Phase 3
+];
+
+/** Visible top-to-bottom order across all groups. */
+export const NAV_ORDER: string[] = [...NAV_OPERATE, ...NAV_FACTORY, ...NAV_OBSERVE].map((n) => n.href);
+
+/** Digit keys 1–9 jump to the first nine views in visible order. */
+export const DIGIT_VIEWS: string[] = NAV_ORDER.slice(0, 9);
+
+/** Flat list, for building command-palette entries. */
+export const NAV_ALL: NavItem[] = [...NAV_OPERATE, ...NAV_FACTORY, ...NAV_OBSERVE];
