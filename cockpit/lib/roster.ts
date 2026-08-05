@@ -21,9 +21,14 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { parseDocument, stringify, type Document } from 'yaml';
 import { z } from 'zod';
-import { CODING_AGENTS, THINKING_LEVELS } from './roster-constants';
+import {
+  CODING_AGENTS,
+  THINKING_LEVELS,
+  validateToolName,
+  validateWritePattern,
+} from './roster-constants';
 
-export { CODING_AGENTS, THINKING_LEVELS } from './roster-constants';
+export { CODING_AGENTS, THINKING_LEVELS, BUILTIN_TOOLS } from './roster-constants';
 
 /** Same shape as resolveDbPath(): SSSF_CONFIG wins, else the sibling engine file. */
 const DEFAULT_CONFIG_RELATIVE = '../engine/adws/adw_sssf_config/sssf.config.yaml';
@@ -88,12 +93,52 @@ export type RosterConfig = z.infer<typeof RosterConfigSchema>;
 export type RosterAgent = z.infer<typeof AgentConfigSchema>;
 export type RosterDefaults = z.infer<typeof ConfigDefaultsSchema>;
 
-// ── The editable surface (this PR) ────────────────────────────────────────────
-// Scalars only: model, coding_agent, thinking, color, purpose per agent; model,
-// coding_agent, thinking on defaults. The array fields (tools/writes) and the
-// prompt/harness paths are the security + wiring boundary — shown read-only in
-// the UI and left to a later, more careful write pass. `.strict()` rejects any
-// key outside the allowlist before a single value is applied.
+// ── The editable surface ──────────────────────────────────────────────────────
+// Scalars (round 1): model, coding_agent, thinking, color, purpose per agent;
+// model, coding_agent, thinking on defaults. Arrays (this round): the security
+// boundary — `tools` (per agent + defaults) and `writes` (per agent). Each list
+// field is nullable: writing `null` REMOVES the key, which for `writes` means
+// "unrestricted" and for `tools` means "inherit defaults / all tools" (see
+// agents.py::load_config). The prompt/harness paths and defaults.protected_files
+// stay read-only — a later pass. `.strict()` rejects any key outside the
+// allowlist before a single value is applied.
+
+/** A validated tool list: each name a usable token, whitespace trimmed, deduped. */
+const ToolListSchema = z
+  .array(z.string())
+  .superRefine((arr, ctx) => {
+    arr.forEach((t, i) => {
+      const err = validateToolName(t);
+      if (err) ctx.addIssue({ code: z.ZodIssueCode.custom, message: err, path: [i] });
+    });
+  })
+  .transform((arr) => {
+    const out: string[] = [];
+    for (const t of arr) {
+      const v = t.trim();
+      if (v && !out.includes(v)) out.push(v);
+    }
+    return out;
+  });
+
+/** A validated writes allowlist: each entry a usable repo-relative pattern. `[]`
+ *  is legal and meaningful — it is what makes an agent read-only. */
+const WritesListSchema = z
+  .array(z.string())
+  .superRefine((arr, ctx) => {
+    arr.forEach((p, i) => {
+      const err = validateWritePattern(p);
+      if (err) ctx.addIssue({ code: z.ZodIssueCode.custom, message: err, path: [i] });
+    });
+  })
+  .transform((arr) => {
+    const out: string[] = [];
+    for (const p of arr) {
+      const v = p.trim();
+      if (v && !out.includes(v)) out.push(v);
+    }
+    return out;
+  });
 
 const AgentPatchSchema = z
   .object({
@@ -108,6 +153,8 @@ const AgentPatchSchema = z
       .string()
       .max(400)
       .transform((s) => s.replace(/\s+/g, ' ').trim()),
+    tools: ToolListSchema.nullable(),
+    writes: WritesListSchema.nullable(),
   })
   .partial()
   .strict();
@@ -117,6 +164,7 @@ const DefaultsPatchSchema = z
     coding_agent: z.enum(CODING_AGENTS),
     model: z.string().regex(MODEL_PATTERN, 'model must look like provider/id'),
     thinking: z.enum(THINKING_LEVELS),
+    tools: ToolListSchema.nullable(),
   })
   .partial()
   .strict();
@@ -186,21 +234,25 @@ function scalarToken(value: unknown): string {
  * absent (an agent inheriting the default) we insert a fresh line right after
  * the map's first entry, at that entry's column indent.
  */
-function fieldSplice(doc: Document, src: string, parentPath: (string | number)[], key: string, value: unknown): Splice {
-  const node = doc.getIn([...parentPath, key], true) as { range?: [number, number, number] } | undefined;
-  if (node?.range) {
-    return { start: node.range[0], end: node.range[1], text: scalarToken(value) };
-  }
-  // Insertion: anchor on the map's first pair (name for an agent, coding_agent
-  // for defaults). Indent from the key's COLUMN — not the literal prefix — so a
-  // first entry sharing a "- " sequence line still yields the sibling indent.
+/**
+ * Where to insert a brand-new key into a map: right after the map's first entry,
+ * at that entry's column indent. Anchoring on the first pair (name for an agent,
+ * coding_agent for defaults) and indenting from the key's COLUMN — not the
+ * literal prefix — means a first entry sharing a "- " sequence line still yields
+ * the sibling indent. Shared by the scalar and list splicers.
+ */
+function anchorInsertPoint(
+  doc: Document,
+  src: string,
+  parentPath: (string | number)[],
+  key: string,
+): { lineEnd: number; indent: string } {
   const map = doc.getIn(parentPath, true) as { items?: { key?: { range?: number[] }; value?: { range?: number[] } }[] } | undefined;
   const first = map?.items?.[0];
   const keyStart = first?.key?.range?.[0];
-  // range[1] is the value's exclusive end (before any trailing comment). Using
-  // it — not range[2], which is past nodeEnd — means an anchor whose value is
-  // immediately followed by a newline finds THAT newline, so the new key lands
-  // right after the anchor's own line rather than one line lower.
+  // range[1] is the value's end before any trailing comment, so an anchor whose
+  // value is immediately followed by a newline finds THAT newline — the new key
+  // lands right after the anchor's own line, not one line lower.
   const anchorEnd = first?.value?.range?.[1];
   if (keyStart == null || anchorEnd == null) {
     throw new RosterInputError(`cannot place "${key}" — no anchor field on the target map`);
@@ -209,7 +261,110 @@ function fieldSplice(doc: Document, src: string, parentPath: (string | number)[]
   const indent = ' '.repeat(keyStart - lineStart);
   let lineEnd = src.indexOf('\n', anchorEnd);
   if (lineEnd < 0) lineEnd = src.length;
+  return { lineEnd, indent };
+}
+
+function fieldSplice(doc: Document, src: string, parentPath: (string | number)[], key: string, value: unknown): Splice {
+  const node = doc.getIn([...parentPath, key], true) as { range?: [number, number, number] } | undefined;
+  if (node?.range) {
+    return { start: node.range[0], end: node.range[1], text: scalarToken(value) };
+  }
+  const { lineEnd, indent } = anchorInsertPoint(doc, src, parentPath, key);
   return { start: lineEnd, end: lineEnd, text: `\n${indent}${key}: ${scalarToken(value)}` };
+}
+
+/** The YAML value for a list, sans the `key:` prefix. `[]` inline (a read-only
+ *  agent), else a block sequence — one item per line at the key's child indent. */
+function listValue(items: string[], keyIndent: string): string {
+  if (items.length === 0) return ' []';
+  const itemIndent = `${keyIndent}  `;
+  return '\n' + items.map((it) => `${itemIndent}- ${scalarToken(it)}`).join('\n');
+}
+
+/**
+ * Build the edit for a list-or-null field (`tools`, `writes`). Unlike a scalar,
+ * a list can be empty, span many lines, or be absent, and its value node carries
+ * any inline comments on its items — so we operate on the WHOLE key block rather
+ * than a single value token:
+ *   - present, value is a list  -> replace `key: …` (key line through the value's
+ *     last line) with a freshly serialized `key: <list>`. Item-level comments on
+ *     the edited field are not preserved (this is the deliberate cost of editing
+ *     the security arrays); the key's own leading comment, and every other line,
+ *     are untouched because we start at the key's line, not before it.
+ *   - present, value is null    -> remove the key block, plus the comment lines
+ *     the CST attributes to this key (the contiguous full-line comments directly
+ *     above it) so its documentation leaves with it instead of stranding above
+ *     the next key. Bounded by the previous sibling's value end, so a comment
+ *     that trails the PREVIOUS field is never swept up by mistake.
+ *   - absent, value is a list   -> insert after the map's anchor (as fieldSplice).
+ *   - absent, value is null     -> nothing to do.
+ * Returns null when there is no edit to make.
+ */
+function listFieldSplice(
+  doc: Document,
+  src: string,
+  parentPath: (string | number)[],
+  key: string,
+  value: string[] | null,
+): Splice | null {
+  const map = doc.getIn(parentPath, true) as { items?: { key?: { value?: unknown; range?: number[] }; value?: { range?: number[] } }[] } | undefined;
+  const items = map?.items ?? [];
+  const pair = items.find((p) => p?.key?.value === key);
+
+  if (pair?.key?.range && pair.value?.range) {
+    const keyStart = pair.key.range[0]!;
+    const keyLineStart = src.lastIndexOf('\n', keyStart - 1) + 1;
+    const keyIndent = src.slice(keyLineStart, keyStart);
+    // range[2] (nodeEnd) reaches past trailing comments on the value; range[1]
+    // is the value's own end. Take whichever we have, then make sure the span
+    // consumes through the end of its line so the next key stays put — unless it
+    // is already at a line boundary (a block seq / commented value ends on \n),
+    // where extending would wrongly swallow the following line.
+    let end = pair.value.range[2] ?? pair.value.range[1]!;
+    if (src[end - 1] !== '\n') {
+      const nl = src.indexOf('\n', end);
+      end = nl < 0 ? src.length : nl + 1;
+    }
+    if (value === null) {
+      // Walk up over full-line comments that belong to this key, stopping before
+      // the previous sibling's value end so its own trailing comment is safe.
+      const prev = items[items.indexOf(pair) - 1];
+      const prevEnd = prev?.value?.range?.[2] ?? prev?.value?.range?.[1] ?? 0;
+      let start = keyLineStart;
+      while (start > prevEnd) {
+        const aboveEnd = start - 1; // the '\n' terminating the line above
+        const aboveStart = src.lastIndexOf('\n', aboveEnd - 1) + 1;
+        if (aboveStart < prevEnd || !src.slice(aboveStart, aboveEnd).trim().startsWith('#')) break;
+        start = aboveStart;
+      }
+      return { start, end, text: '' };
+    }
+    return { start: keyLineStart, end, text: `${keyIndent}${key}:${listValue(value, keyIndent)}\n` };
+  }
+
+  // Key absent.
+  if (value === null) return null;
+  const { lineEnd, indent } = anchorInsertPoint(doc, src, parentPath, key);
+  return { start: lineEnd, end: lineEnd, text: `\n${indent}${key}:${listValue(value, indent)}` };
+}
+
+/** Route each field in a patch to the scalar or list splicer. A null or array
+ *  value is a list field (tools/writes); everything else is a scalar. */
+function splicesForMap(
+  doc: Document,
+  src: string,
+  parentPath: (string | number)[],
+  patch: Record<string, unknown>,
+): Splice[] {
+  const out: Splice[] = [];
+  for (const [key, value] of Object.entries(patch)) {
+    const splice =
+      value === null || Array.isArray(value)
+        ? listFieldSplice(doc, src, parentPath, key, value as string[] | null)
+        : fieldSplice(doc, src, parentPath, key, value);
+    if (splice) out.push(splice);
+  }
+  return out;
 }
 
 /**
@@ -227,17 +382,13 @@ export function writeRoster(edit: RosterEdit, path = resolveConfigPath()): Roste
 
   const splices: Splice[] = [];
   if (parsed.defaults) {
-    for (const [key, value] of Object.entries(parsed.defaults)) {
-      splices.push(fieldSplice(doc, src, ['defaults'], key, value));
-    }
+    splices.push(...splicesForMap(doc, src, ['defaults'], parsed.defaults));
   }
   if (parsed.agents) {
     for (const [name, patch] of Object.entries(parsed.agents)) {
       const idx = agentIndex(doc, name);
       if (idx < 0) throw new RosterInputError(`unknown agent "${name}" — not in the roster`);
-      for (const [key, value] of Object.entries(patch)) {
-        splices.push(fieldSplice(doc, src, ['agents', idx], key, value));
-      }
+      splices.push(...splicesForMap(doc, src, ['agents', idx], patch));
     }
   }
 
@@ -287,6 +438,17 @@ export function rosterWarnings(cfg: RosterConfig): RosterWarning[] {
       out.push({
         agent: a.name,
         message: `backend "pi" runs model "${model}" — pi's Anthropic OAuth is expired here; route anthropic/* through claude_code.`,
+      });
+    }
+    // An agent that loads a harness extension but has no explicit `tools` list
+    // inherits defaults.tools (agents.py::load_config), which never names the
+    // extension's tools — so pi filters them out and the extension is dead
+    // weight. The remedy is to list the extension's tools in the agent's own
+    // `tools`. (null here means the key is absent → inheriting.)
+    if (a.harness_engineering.length > 0 && a.tools == null) {
+      out.push({
+        agent: a.name,
+        message: `loads a harness extension but has no explicit tools list — its extension tools are filtered out; name them in tools.`,
       });
     }
   }
