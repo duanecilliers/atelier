@@ -12,6 +12,7 @@ import sqlite3
 from pathlib import Path
 
 from .data_types import AgentConfig, EventRecord, GateReport, Phase
+from .queue import RUN_QUEUE_DDL
 from .utils import ensure_dir, new_id, now_iso
 
 SCHEMA = """
@@ -87,7 +88,7 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   created_at    TEXT, last_used_at TEXT,
   PRIMARY KEY (adw_id, agent)
 );
-"""
+""" + RUN_QUEUE_DDL   # the Phase 2 control seam — DDL owned by queue.py
 
 # Columns added after a schema shipped. CREATE TABLE IF NOT EXISTS never
 # revisits an existing table, so additive changes need an explicit ALTER.

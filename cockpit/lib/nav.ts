@@ -25,7 +25,7 @@ export type NavItem = { href: string; label: string; icon: LucideIcon; live?: bo
 // The runs and the queue that feeds them.
 export const NAV_OPERATE: NavItem[] = [
   { href: '/', label: 'Runs', icon: Activity, live: true },
-  { href: '/queue', label: 'Queue', icon: ListChecks }, // Phase 2 — control plane
+  { href: '/queue', label: 'Queue', icon: ListChecks, live: true }, // Phase 2 — control plane
 ];
 
 // The factory: the agents that propose and the skills they draw on.

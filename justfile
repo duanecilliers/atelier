@@ -52,6 +52,18 @@ sdlc *ARGS:
 simple-sdlc *ARGS:
     uv run engine/adws/adw_simple_sdlc.py --config {{config}} "$@"
 
+# ── the control plane (Phase 2) ───────────────────────────────────────────────
+# The cockpit enqueues runs into run_queue; this worker is the only thing that
+# launches them. Leave it running in a terminal while you drive from the UI.
+
+# drain run_queue, launching queued runs: just worker [--concurrency N]
+worker *ARGS:
+    uv run engine/adws/adw_worker.py --config {{config}} "$@"
+
+# what is waiting or running in the queue right now
+queue:
+    @sqlite3 {{db}} "select id, status, adw_name, coalesce(agent,'') agent, substr(request,1,40) request, coalesce(adw_id,'') adw_id from run_queue order by id desc limit 15;"
+
 # ── watch it ────────────────────────────────────────────────────────────────
 # The cockpit (cd cockpit && pnpm dev) is the real UI; these are quick sqlite peeks.
 

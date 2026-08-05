@@ -23,6 +23,7 @@ import {
   GateResultRowSchema,
   PhaseRowSchema,
   ProcessRowSchema,
+  RunQueueRowSchema,
   SessionRowSchema,
 } from './schemas';
 import type {
@@ -34,6 +35,7 @@ import type {
   GateResult,
   Phase,
   Process,
+  RunQueueRow,
   Session,
   SessionDetail,
   SessionSummary,
@@ -108,6 +110,22 @@ export class AtelierDb {
 
   private optionalColumn(table: string, column: string): string {
     return this.hasColumn(table, column) ? column : `NULL AS ${column}`;
+  }
+
+  /**
+   * True if a table exists. run_queue is created by the engine/worker/control
+   * connection, so a cockpit reading an untouched db must tolerate its absence
+   * (a readonly connection can't create it). Cached like hasColumn.
+   */
+  private hasTable(table: string): boolean {
+    const key = `table:${table}`;
+    if (!this.columnCache.get(key)) {
+      const row = this.db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")
+        .get(table);
+      this.columnCache.set(key, row != null);
+    }
+    return this.columnCache.get(key) ?? false;
   }
 
   close(): void {
@@ -361,6 +379,25 @@ export class AtelierDb {
         )
         .all(adwId),
     ) as Process[];
+  }
+
+  /**
+   * The run_queue, most recent first — the control-plane view. Empty (not an
+   * error) on a db the engine/worker has never touched, so the queue page can
+   * render before the first run is ever enqueued.
+   */
+  queue(limit = 100): RunQueueRow[] {
+    if (!this.hasTable('run_queue')) return [];
+    return z.array(RunQueueRowSchema).parse(
+      this.db
+        .prepare(
+          `SELECT id, adw_id, adw_name, agent, request, config, status, requested_by,
+                  cancel_requested, pid, exit_code, error,
+                  enqueued_at, claimed_at, started_at, ended_at
+             FROM run_queue ORDER BY id DESC LIMIT ?`,
+        )
+        .all(clamp(limit, 1, MAX_LIMIT)),
+    ) as RunQueueRow[];
   }
 
   sessionCount(): number {
