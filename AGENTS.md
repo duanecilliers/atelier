@@ -15,6 +15,11 @@ It's built phase-by-phase from the locked roadmap in `docs/atelier-plan.html`. P
 done (foundations/seam · observe · control plane); Phase 3+ (observability/cost, authoring,
 real-time) are next.
 
+This file is the terse canonical contract. The long-form guides — architecture, engine runtime,
+agents/gates, ADW authoring, config/roster, cockpit, operations, and end-to-end extension
+recipes — live in **`docs/README.md`** and the numbered guides beside it. Read those to
+understand a subsystem in depth or to extend the factory.
+
 ## Commands
 
 Run **engine** commands from the repo root; run **cockpit** commands from `cockpit/`.
