@@ -117,6 +117,20 @@ one-line `claude-agent-sdk` dep bump ×12.)
 no `engine/` segment) **this breaks** — in exactly the repos we want to stamp into. It must resolve
 via `git_helper.repo_root()` + the derived adws subdir like everything else.
 
+**Symlinked worktrees make this worse, and `git_helper.repo_root()` is the fix that also survives
+them.** A bare-repo-with-worktrees layout (e.g. `repayd.git/`, worktrees checked out as
+`repayd.git/<branch>/`) shares one worktree-agnostic `shared/` dir that each worktree symlinks in.
+The natural stamp target is `shared/adws/`, symlinked into every worktree as `<worktree>/adws →
+../shared/adws`. Under that layout any `Path(__file__)`-relative resolution is poison:
+`Path(__file__).resolve()` **follows the symlink**, so from a worktree the worker's `__file__`
+becomes `…/shared/adws/adw_worker.py` and `parents[2]` resolves to the **bare repo**, not the
+worktree the agent should build in. `git_helper.repo_root()` sidesteps this entirely because it
+runs `git rev-parse --show-toplevel` from **cwd**, not from `__file__` — and in a worktree that
+returns the worktree path (verified). So a worker launched with `cwd=<worktree>` gets the correct
+root even though the script it executes lives behind a symlink in `shared/`. Consequence: **audit
+`adw_modules/` for *any* `Path(__file__)`-relative path logic, not just `adw_worker.py`**; all of
+it must resolve via `git`/cwd or config for stamping into symlinked worktrees to work.
+
 ### 4. A "project" is four resolvers hanging off one root
 
 The cockpit's single-project assumption lives in four env-based resolvers, all defaulting to the
@@ -208,8 +222,12 @@ Three properties fall out:
 - `adw_worker.py`: replace `REPO_ROOT = parents[2]` with `git_helper.repo_root()`; replace the
   `REPO_ROOT / "engine" / "adws"` literals in `build_argv()`/`spawn()` with a resolved adws dir
   (config-derived or `repo_root / adwsSubdir`). Default `--config` becomes layout-relative.
+- **Use `git_helper.repo_root()`, never `Path(__file__)`** — it resolves from cwd, so it stays
+  correct when `adws/` is a symlink into a shared dir (see insight #3). Sweep `adw_modules/` for any
+  other `__file__`-relative path logic and convert it to `git`/cwd/config resolution.
 - Verify a worker launched from a stamped repo root builds correct argv and its runs commit to that
-  repo.
+  repo — including from a **symlinked worktree** (`<worktree>/adws → ../shared/adws`), where the
+  resolved root must be the worktree, not the symlink target's parent.
 
 ### Part E — multi-project cockpit (URL-segment routing)
 
