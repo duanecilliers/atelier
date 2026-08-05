@@ -1,1 +1,12 @@
 .lavish/
+.DS_Store
+
+# cockpit (Next.js) build + deps — cockpit/.gitignore also covers these
+cockpit/node_modules/
+cockpit/.next/
+cockpit/next-env.d.ts
+
+# engine/ shares this repo's git root (no nested .git). Its runtime data
+# (adws/adw_data/sessions/, sssf.db*, .env, __pycache__) is ignored by
+# engine/.gitignore, which git honors relative to that folder.
+specs/
