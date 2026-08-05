@@ -12,11 +12,13 @@ must not break), see [`AGENTS.md`](../AGENTS.md) at the repo root — this set i
 companion to it, not a replacement.
 
 > **Status.** These guides describe `main` as it currently stands. The factory is built
-> phase-by-phase from the locked roadmap in [`atelier-plan.html`](atelier-plan.html). One Phase 5
-> item — **sandbox / isolated runs** (running each ADW in its own throwaway git worktree for
-> parallel-write isolation) — is still in design and **not yet implemented**, so it is
-> intentionally absent from these guides; see the [design note](design/sandbox-runs.md) for the
-> proposed shape. This page will grow when it lands.
+> phase-by-phase from the locked roadmap in [`atelier-plan.html`](atelier-plan.html). Two items are
+> still in design and **not yet implemented**, so they are intentionally absent from these guides:
+> **sandbox / isolated runs** (running each ADW in its own throwaway git worktree for parallel-write
+> isolation) — see the [design note](design/sandbox-runs.md); and **distribution** (making the
+> engine stampable into any repo, updatable from Atelier, plus a multi-project cockpit and worker
+> supervisor) — see the [design note](design/atelier-distribution.md). This page will grow when they
+> land.
 
 ## Start here
 
