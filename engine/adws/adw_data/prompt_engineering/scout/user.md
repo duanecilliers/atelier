@@ -16,7 +16,7 @@
 
 ## Task
 
-Find what `prompt` asks about. Write findings into `context_handoff_dir`, then emit your `Report` JSON.
+Find what `prompt` asks about. Write findings **only** into the absolute `context_handoff_dir` path above — use it verbatim, never a repo directory — then emit your `Report` JSON.
 
 ## Report
 
