@@ -21,7 +21,7 @@ Confirm that the work reported in `previous_envelope` is what was asked for.
 1. Establish the spec: read `<context_handoff_dir>/plan.md` if it exists, else use `prompt`.
 2. Read the code that was actually written, starting from `previous_envelope.changed_files`.
 3. Rule on every requirement in the spec — one `findings` entry each, with evidence.
-4. Write the review to `<context_handoff_dir>/review.md`, then emit your `Report` JSON.
+4. Write the review to `<context_handoff_dir>/review.md` — `context_handoff_dir` is an absolute path and your only write target; use it verbatim, never a repo directory (even one that looks like a handoff or notes folder). Then emit your `Report` JSON.
 
 ## Report
 
