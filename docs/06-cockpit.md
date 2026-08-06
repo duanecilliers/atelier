@@ -18,15 +18,21 @@ only automated gates (see [AGENTS.md](../AGENTS.md)).
 
 ### Pages (`app/**/page.tsx`)
 
+**Every page lives under `app/[project]/…`** (multi-project — §1.5): the routes below carry a
+`/[project]` prefix (`/lunacomet/cost`, `/lunacomet/runs/[adwId]`, …), and each page's `getDb()` /
+roster read is scoped to that project's segment. The bare root `/` (`app/page.tsx`) is a
+`force-dynamic` redirect to `/{defaultProjectId()}`. Reads shown as `getDb()` below are really
+`getDb(projectId)`.
+
 | Route | File | Purpose | Reads | Writes |
 |---|---|---|---|---|
-| `/` | `app/page.tsx` | Runs list ("Factory floor") — every ADW session newest-first, stat tiles, phase progress dots per row, tokens/cost/elapsed, hover-× to archive a row. `force-dynamic`. | `getDb().sessions()` | archive via POST `/api/runs/[adwId]/archive` |
-| `/agents` | `app/agents/page.tsx` | Roster view + editor. Reads `sssf.config.yaml` via `readRoster()`, enriches each agent with `getDb().agentTelemetry()`, surfaces `rosterWarnings()`. Renders `<RosterEditor>`. `force-dynamic`. | roster YAML (file) + `agent_sessions` table | via child component, POST/PUT/DELETE `/api/roster` |
-| `/cost` | `app/cost/page.tsx` | Cross-run spend dashboard — grand totals + per-model breakdown with share bars. `force-dynamic`. | `getDb().costRollup()` | none |
-| `/gates` | `app/gates/page.tsx` | Cross-run gate health — pass/fail/retry per gate type + recent failures list. `force-dynamic`. | `getDb().gateRollup()` | none |
-| `/queue` | `app/queue/page.tsx` | Control-plane Kanban board — 6 lanes (queued/claimed/running/done/failed/canceled), `<QueueLauncher>` at top, `<CancelButton>` per active card. Live via `<LiveRefresh watch="queue">`. `force-dynamic`. | `getDb().queue()` + `readRecipes()` (disk) | via child components, POST `/api/queue`, POST `/api/queue/[id]/cancel` |
-| `/runs/[adwId]` | `app/runs/[adwId]/page.tsx` | Run detail — header (+ archive), stat tiles, `<Waterfall>` (proportional phase timeline; clicking a block sets `?phase=` and opens `<PhaseDetail>`: agent config, compiled prompts off disk, per-component cost, phase-scoped gates/outputs/events), agents list, `<ModelStack>`, `<LiveTail>`. With no phase selected, shows the run-wide `<EnvelopePanel>`/`<GatePanel>` instead. `notFound()` if the session doesn't exist. `force-dynamic`. | `getDb().sessionDetail/events/envelopes/gates/runModelStack()` + prompt files (disk, via `lib/prompts.ts`) | archive via POST `/api/runs/[adwId]/archive` |
-| `/skills` | `app/skills/page.tsx` | Read-only cookbook — one card per `engine/adws/adw_*.py` recipe, plus `<RecipeBuilder>` composer. `force-dynamic`. | `readRecipes()` (parses `.py` docstrings from disk, not db) | via child component, GET/POST `/api/adws` |
+| `/[project]` | `app/[project]/page.tsx` | Runs list ("Factory floor") — every ADW session newest-first, stat tiles, phase progress dots per row, tokens/cost/elapsed, hover-× to archive a row. `force-dynamic`. | `getDb().sessions()` | archive via POST `/api/runs/[adwId]/archive` |
+| `/[project]/agents` | `app/[project]/agents/page.tsx` | Roster view + editor. Reads `sssf.config.yaml` via `readRoster()`, enriches each agent with `getDb().agentTelemetry()`, surfaces `rosterWarnings()`. Renders `<RosterEditor>`. `force-dynamic`. | roster YAML (file) + `agent_sessions` table | via child component, POST/PUT/DELETE `/api/roster` |
+| `/[project]/cost` | `app/[project]/cost/page.tsx` | Cross-run spend dashboard — grand totals + per-model breakdown with share bars. `force-dynamic`. | `getDb().costRollup()` | none |
+| `/[project]/gates` | `app/[project]/gates/page.tsx` | Cross-run gate health — pass/fail/retry per gate type + recent failures list. `force-dynamic`. | `getDb().gateRollup()` | none |
+| `/[project]/queue` | `app/[project]/queue/page.tsx` | Control-plane Kanban board — 6 lanes (queued/claimed/running/done/failed/canceled), `<QueueLauncher>` at top, `<CancelButton>` per active card. Live via `<LiveRefresh watch="queue">`. `force-dynamic`. | `getDb().queue()` + `readRecipes()` (disk) | via child components, POST `/api/queue`, POST `/api/queue/[id]/cancel` |
+| `/[project]/runs/[adwId]` | `app/[project]/runs/[adwId]/page.tsx` | Run detail — header (+ archive), stat tiles, `<Waterfall>` (proportional phase timeline; clicking a block sets `?phase=` and opens `<PhaseDetail>`: agent config, compiled prompts off disk, per-component cost, phase-scoped gates/outputs/events), agents list, `<ModelStack>`, `<LiveTail>`. With no phase selected, shows the run-wide `<EnvelopePanel>`/`<GatePanel>` instead. `notFound()` if the session doesn't exist. `force-dynamic`. | `getDb().sessionDetail/events/envelopes/gates/runModelStack()` + prompt files (disk, via `lib/prompts.ts`) | archive via POST `/api/runs/[adwId]/archive` |
+| `/[project]/skills` | `app/[project]/skills/page.tsx` | Read-only cookbook — one card per `adw_*.py` recipe, plus `<RecipeBuilder>` composer. `force-dynamic`. | `readRecipes()` (parses `.py` docstrings from disk, not db) | via child component, GET/POST `/api/adws` |
 
 > **Note — the waterfall's multi-agent (multi-lane) path is untested against a real trace.**
 > `<Waterfall>` groups phases into one lane per role: `engineer`, `code`, and one per distinct
@@ -51,10 +57,25 @@ only automated gates (see [AGENTS.md](../AGENTS.md)).
 | `/api/runs/[adwId]/events` | GET | Non-streaming rowid-cursor poll: `?after=<rowid>&limit=` → `{events, cursor, has_more, status}`. Retained for parity with the engine's own visualizer; superseded by the SSE route for the live tail. | `db.events()` + `db.session()` | none |
 | `/api/runs/[adwId]/stream` | GET | Per-run SSE live tail. Resumes from `Last-Event-ID` or `?after=`. Closes when `status !== 'running'`. Node runtime. | `db.events()` + `db.session()` | none |
 | `/api/runs/[adwId]/archive` | POST | Review seam HTTP face — sets (or clears, `{archived:false}`) `sessions.archived` via `lib/review.ts`. Never spawns anything, never touches a run's trace. | — | UPDATE `sessions.archived` via `getReview().setArchived()` |
+| `/api/projects/worker` | GET, POST | Per-project worker control (§1.5, [09-distribution.md](09-distribution.md) §7). GET → `{ attached, desired, registryMode, last_seen_at }` for the footer poll; POST flips `workerDesired` in the registry — **intent only**, the supervisor disposes. Never spawns anything. | `getDb(project).workerStatus()` (the `workers` heartbeat) | `workerDesired` in `atelier.projects.json` via `setWorkerDesired()` |
 
 Every page catches its own load error and renders an inline error box rather than crashing — the
 shell (Sidebar/Topbar/CommandPalette) never depends on the db, so a missing `sssf.db` only 500s
 the data views.
+
+## 1.5. Multi-project (the registry)
+
+One cockpit fronts N stamped repos (distribution **Part E**). `cockpit/atelier.projects.json`
+(override `ATELIER_PROJECTS`, `.example.json` committed) lists `{ id, name, root, adwsSubdir,
+workerDesired? }` per project; `lib/projects.ts::pathsForProject(projectId)` turns the `[project]`
+route segment into the four filesystem paths the engine layout needs (db, config, prompt dir, adws
+dir), all derived from `root + adwsSubdir`. **When the file is absent**, the cockpit falls back to
+one implicit `default` project resolved from the legacy `SSSF_*` env — so a single-project checkout
+and every test that sets those vars works with zero registry config. The project-scoped
+`app/[project]/layout.tsx` (`force-dynamic`) reads the registry, `404`s an unknown id, and renders
+the switcher; only `{ id, name }` crosses to the client, never the filesystem `root`s. Full
+mechanics — the supervisor, the `workers` heartbeat, stamping — are in
+[09-distribution.md](09-distribution.md).
 
 ## 2. The lib layer
 
@@ -64,27 +85,32 @@ the data views.
   throws if the file doesn't exist. Tolerates schema drift: `hasColumn()`/`optionalColumn()`
   probe `PRAGMA table_info` (cached, monotonic false→true so a live tracer `ALTER` is picked up)
   and substitute `NULL AS col` when a migration column is absent; `hasTable()` tolerates
-  `run_queue` not existing yet. `resolveDbPath()`: `SSSF_DB` env, else
-  `<cwd>/../engine/adws/adw_data/sssf.db`. Every query method's result is Zod-validated via
+  `run_queue` not existing yet. The db path is resolved *per project* by
+  `pathsForProject()` (`lib/projects.ts`), not from env directly — the `AtelierDb` constructor takes
+  the resolved path. Every query method's result is Zod-validated via
   `lib/schemas.ts`, except the hot `events()` path, which is cast. Methods summarized:
   `sessions()`, `session()`, `phases()`, `agentSessions()`, `sessionDetail()`, `usage()`,
   `runModelStack()`, `costRollup()`, `gateRollup()`, `agentTelemetry()`, `events()` (the
   rowid-cursor primitive shared by the poll route, the SSE route, and run-detail's initial
-  load), `envelopes()`, `gates()`, `processes()`, `queue()`, `sessionCount()`.
-- `lib/data.ts` — `getDb()`: a single `AtelierDb` memoized on `globalThis.__atelierDb` so Next's
-  dev HMR reuses one connection instead of leaking a new one per reload.
+  load), `envelopes()`, `gates()`, `processes()`, `queue()`, `workerStatus()` (the `workers`
+  heartbeat freshness), `sessionCount()`.
+- `lib/data.ts` — `getDb(projectId)`: one `AtelierDb` **per resolved db path**, memoized in a `Map`
+  on `globalThis.__atelierDbs` so Next's dev HMR reuses connections instead of leaking one per
+  reload. Multi-project keys by path, so an env-fallback project and any id mapping to the same db
+  share a connection. `getControl(projectId)`/`getReview(projectId)` memoize the same way.
 
 ### The seam mirror
 
 - `lib/schemas.ts` — one Zod schema per table (`SessionRowSchema`, `PhaseRowSchema`,
   `EventRowSchema`, `EnvelopeRowSchema`, `GateResultRowSchema`, `ProcessRowSchema`,
-  `AgentSessionRowSchema`, `RunQueueRowSchema`), keyed to the exact snake_case columns
-  `tracer.py` writes. Migration-added columns are `.optional()`. `TABLE_COLUMNS` is *derived*
-  from the schemas and is what `scripts/check-contract.ts` asserts against the live db.
+  `AgentSessionRowSchema`, `RunQueueRowSchema`, `WorkerRowSchema`), keyed to the exact snake_case
+  columns `tracer.py` writes. Migration-added columns are `.optional()`; `workers`' columns all
+  ship in the `CREATE`, so none are optional (a fresh table is a hard requirement). `TABLE_COLUMNS`
+  is *derived* from the schemas and is what `scripts/check-contract.ts` asserts against the live db.
 - `lib/types.ts` — the frozen TS row interfaces, mirroring `engine/adws/adw_modules/tracer.py`'s
   `SCHEMA` one-for-one: `Session`, `Phase`, `Event`, `Envelope`, `GateResult`, `Process`,
-  `AgentSession`, `RunQueueRow`, plus enums (`EventType`, `QueueStatus`, ...) and composed/derived
-  shapes (`SessionSummary`, `CostRollup`, `GateRollup`, ...).
+  `AgentSession`, `RunQueueRow`, `WorkerRow`, plus enums (`EventType`, `QueueStatus`, ...) and
+  composed/derived shapes (`SessionSummary`, `CostRollup`, `GateRollup`, `WorkerStatus`, ...).
 
 Any change to a table in `tracer.py` must be mirrored in both files — see the seam contract in
 [AGENTS.md](../AGENTS.md) and the engine side in [02-engine-runtime.md](02-engine-runtime.md).
@@ -259,11 +285,15 @@ Shell: `components/Sidebar.tsx` (fixed left rail, three `NavGroup`s built from `
 
 Env vars (`.env.local`, gitignored, resolved relative to `cockpit/`'s cwd when relative):
 
-- `SSSF_DB` — path to `sssf.db` (default `../engine/adws/adw_data/sssf.db`).
-- `SSSF_CONFIG` — path to `sssf.config.yaml` (default `../engine/adws/adw_sssf_config/sssf.config.yaml`).
-- `SSSF_ADWS_DIR` — path to the ADW scripts dir (default `../engine/adws`).
+- `ATELIER_PROJECTS` — path to the multi-project registry (default `cockpit/atelier.projects.json`).
+  When the registry file is **present** it supplies every project's paths and the `SSSF_*` vars
+  below are unused; when **absent**, the cockpit falls back to a single `default` project resolved
+  from them (§1.5).
+- `SSSF_DB` — path to `sssf.db` (default `../engine/adws/adw_data/sssf.db`) — fallback-mode only.
+- `SSSF_CONFIG` — path to `sssf.config.yaml` (default `../engine/adws/adw_sssf_config/sssf.config.yaml`) — fallback-mode only.
+- `SSSF_ADWS_DIR` — path to the ADW scripts dir (default `../engine/adws`) — fallback-mode only.
 - `SSSF_PE_DIR` — where `addAgent()` bootstraps prompt files; only relocates where the cockpit
-  writes, not the fixed repo-root-relative path written into the YAML.
+  writes, not the fixed repo-root-relative path written into the YAML — fallback-mode only.
 
 What must stay node-free: `lib/roster-constants.ts` and `lib/adws.ts` (so their client
 consumers, `RosterEditor.tsx` and `QueueLauncher`, don't drag `node:fs`/`yaml` into the browser

@@ -28,6 +28,9 @@ regardless of `SSSF_DB`).
 | Plan + build + test + commit | `just sdlc "<ask>"` | `uv run engine/adws/adw_plan_build_test.py --config {{config}} "$@"` |
 | Full chain + review + docs | `just simple-sdlc "<ask>"` | `uv run engine/adws/adw_simple_sdlc.py --config {{config}} "$@"` |
 | Drain the launch queue | `just worker` (or `just worker --concurrency N`) | `uv run engine/adws/adw_worker.py --config {{config}} "$@"` — the **only** thing that turns a queued `run_queue` row into a live ADW subprocess |
+| Supervise workers across projects | `uv run engine/adws/adw_worker.py --supervise` | Cross-project mode: keep one worker per `workerDesired` project draining its queue (see §3 and [09-distribution.md](09-distribution.md)) |
+| Stamp the engine into a repo | `uv run engine/adws/install.py <target> [--init]` | Generate `adws/` into a target repo + write `.atelier/manifest.json` ([09-distribution.md](09-distribution.md) §2) |
+| Update a stamped repo's engine | `uv run engine/adws/update.py <target>` | Pull later Atelier managed code into a stamped repo, skip-or-flag on conflict ([09](09-distribution.md) §3) |
 | Peek: what's queued/running | `just queue` | `select id, status, adw_name, agent, request, adw_id from run_queue order by id desc limit 15;` |
 | Peek: last 10 runs | `just sessions` | `select adw_id, status, request, total_tokens, total_cost from sessions order by started_at desc limit 10;` |
 | Peek: phase status for a run | `just phases <adw_id>` | `select seq, name, kind, owner, status, attempt from phases where adw_id='<adw_id>' order by seq;` |
@@ -121,9 +124,11 @@ row is `claimed` only for the instant between winning it off the queue and `Pope
 a crash there is visible rather than silently losing the row.
 
 Invocation: `uv run engine/adws/adw_worker.py [--config <cfg>] [--concurrency N] [--poll 1.0]
-[--once]`. Defaults: `--concurrency 2`, `--poll 1.0`s, `--config
+[--once] [--supervise [--registry <path>]]`. Defaults: `--concurrency 2`, `--poll 1.0`s, `--config
 engine/adws/adw_sssf_config/sssf.config.yaml`. Must be run from the repo root — same cwd every
-ADW expects.
+ADW expects (it resolves `REPO_ROOT` via `git_helper.repo_root()` from cwd, never from
+`Path(__file__)`, so it also works from a stamped repo or a symlinked worktree — see
+[09-distribution.md](09-distribution.md) §8). `--supervise` is the cross-project mode, covered below.
 
 `drain()` loops:
 
@@ -161,6 +166,20 @@ argv += ["--", row["request"] or ""]
 
 So a UI-launched run is byte-for-byte identical to a CLI one — same trace, same acceptance. Keep
 this invariant when extending either side.
+
+### The supervisor (`--supervise`) — one worker per project
+
+`uv run engine/adws/adw_worker.py --supervise [--registry <atelier.projects.json>]` runs the
+worker in **cross-project mode**: it reads the projects registry every poll and keeps exactly one
+worker per `workerDesired` project draining that project's queue, each spawned in the project's own
+`cwd` (so each resolves its own `REPO_ROOT`/config, identical to a hand-launched `just worker`
+there). Toggling `workerDesired` from the cockpit takes effect within a poll — a newly-desired
+project gets a worker, an undesired/removed one gets a `SIGTERM` and drains before exiting; a
+crashed worker is respawned next loop. The supervisor is the **one process besides a worker allowed
+to spawn**, and the cockpit "start worker" button only writes the `workerDesired` intent (never
+spawns) — preserving the determinism spine one level up. Each worker heartbeats liveness into its
+own repo's `workers` table so the cockpit can show "no worker attached" honestly. Full detail:
+[09-distribution.md](09-distribution.md) §7.
 
 ## 4. Environment variables
 
