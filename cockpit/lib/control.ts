@@ -22,7 +22,7 @@ import { z } from 'zod';
 import { readAdwNames } from './skills';
 import { pathsForProject } from './projects';
 import { RunQueueRowSchema, SandboxRowSchema } from './schemas';
-import { SANDBOX_LEVELS } from './roster-constants';
+import { SANDBOX_LEVELS, validateBranchName } from './roster-constants';
 import { TERMINAL_SANDBOX_STATUSES } from './types';
 import type { QueueStatus, RunQueueRow, Sandbox, SandboxStatus } from './types';
 
@@ -77,10 +77,21 @@ CREATE TABLE IF NOT EXISTS sandboxes (
 const CREATABLE_LEVELS = SANDBOX_LEVELS.filter((l) => l !== 'local');
 
 /** The validated shape a caller may create a sandbox with. `branch` defaults to
- *  `adw/<id>` when omitted (the interpolation engine lands in slice 2). */
+ *  `adw/<id>` when omitted. It is validated to a git-refname- AND shell-safe
+ *  charset because the worker interpolates ${BRANCH} into shell setup/land
+ *  commands — a git-legal name with a `;`/`$`/backtick would otherwise inject. */
 export const CreateSandboxSpecSchema = z.object({
   level: z.enum(CREATABLE_LEVELS as [string, ...string[]]).default('worktree'),
-  branch: z.string().trim().min(1).max(200).nullable().optional(),
+  branch: z
+    .string()
+    .trim()
+    .nullable()
+    .optional()
+    .superRefine((b, ctx) => {
+      if (b == null) return;
+      const err = validateBranchName(b);
+      if (err) ctx.addIssue({ code: z.ZodIssueCode.custom, message: err });
+    }),
 });
 export type CreateSandboxSpec = z.infer<typeof CreateSandboxSpecSchema>;
 

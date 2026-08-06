@@ -64,6 +64,29 @@ export function validateAgentName(name: string): string | null {
   return null;
 }
 
+// A sandbox branch name becomes both a git ref AND (via the sandbox profile's
+// ${BRANCH} interpolation) a token spliced into shell setup/services/land
+// commands. Git's own refname rules block spaces and ~^:?*[\ but ALLOW shell
+// metacharacters like ; & | $ ` ( ), so a git-legal branch could still inject a
+// shell command. Restrict to a charset that is safe on both fronts: letters,
+// digits, and - _ . / (the `adw/<id>` shape and ordinary branch names).
+const BRANCH_NAME_RE = /^[A-Za-z0-9._/-]+$/;
+
+/** null if the name is a usable, injection-safe sandbox branch, else a reason. */
+export function validateBranchName(name: string): string | null {
+  const b = name.trim();
+  if (!b) return 'branch is empty';
+  if (b.length > 200) return 'branch is too long';
+  if (!BRANCH_NAME_RE.test(b)) {
+    return `"${b}" — a branch may contain only letters, digits and - _ . / (no shell metacharacters)`;
+  }
+  // git refname rules we also enforce so worktree add can't fail on a name we accepted.
+  if (b.includes('..') || b.startsWith('/') || b.endsWith('/') || b.startsWith('-') || b.endsWith('.lock')) {
+    return `"${b}" — not a valid git branch name`;
+  }
+  return null;
+}
+
 const TOOL_NAME_RE = /^[a-z][a-z0-9_]*$/;
 
 /** null if the name is a usable tool token, else a human-readable reason. */
