@@ -63,6 +63,68 @@ pnpm dev                       # http://127.0.0.1:4200
 The cockpit finds the db via `SSSF_DB` in `cockpit/.env.local` (an absolute path to
 `engine/adws/adw_data/sssf.db`).
 
+## Stamping into another repo
+
+Atelier can **stamp its engine into any git repo**, turning it into an Atelier-driven
+factory that keeps its own trace. The payload is generated *live* from `engine/adws/`
+(no committed templates to drift) at the native `adws/` layout — no `engine/` prefix.
+
+**First stamp** — run from your Atelier checkout:
+
+```bash
+uv run engine/adws/install.py /path/to/target-repo   # add --init to create + git-init a target that isn't a repo yet
+```
+
+What lands, and why the buckets matter for updates:
+
+| Bucket    | What                                                                       | On update |
+| --------- | -------------------------------------------------------------------------- | --------- |
+| MANAGED   | `adws/adw_modules/*.py`, `adws/adw_*.py` — engine code Atelier owns         | kept current (hashed in `.atelier/manifest.json`) |
+| USER      | `adws/adw_sssf_config/sssf.config.yaml`, prompts, the justfile, `.env.sample` | stamped once, never touched again |
+| RUNTIME   | `adws/adw_data/sessions/`, `sssf.db*`                                       | gitignored, never stamped |
+
+Install is **idempotent by refusal**: if `.atelier/manifest.json` already exists it
+stops and points you at `update.py`, so a re-run can never clobber your roster.
+
+**Run an ADW from the stamped repo** (native layout — no `engine/` prefix):
+
+```bash
+cd /path/to/target-repo
+uv run adws/adw_scout.py --config adws/adw_sssf_config/sssf.config.yaml "one-line summary of this repo"
+just sessions                  # the justfile is stamped in; the trace lands in the repo's own sssf.db
+```
+
+Before running build/test ADWs, edit the stamped `sssf.config.yaml`'s `quality:` /
+`verify:` block to match the target's own test/lint commands.
+
+**Pull later engine improvements** — reconciled per file by content hash; your edits are
+never clobbered (a conflict is written beside the file as `<file>.atelier-new`):
+
+```bash
+uv run engine/adws/update.py /path/to/target-repo
+```
+
+**Front many stamped repos from one cockpit.** Register each in
+`cockpit/atelier.projects.json` (gitignored; copy `atelier.projects.example.json`).
+`root` may be absolute or relative to `cockpit/`; `adwsSubdir` is `adws` for a stamped
+repo (`engine/adws` for Atelier self-hosting):
+
+```json
+[
+  { "id": "my-app", "name": "My App", "root": "/abs/path/to/target-repo", "adwsSubdir": "adws" }
+]
+```
+
+The cockpit then routes each project under `/<id>/…` with a switcher. A **supervisor**
+keeps one worker draining each project's queue:
+
+```bash
+uv run engine/adws/adw_worker.py --supervise   # reads the registry; the ONLY thing that spawns workers
+```
+
+Start/stop a project's worker from the cockpit sidebar footer — it writes a
+`workerDesired` flag the supervisor disposes; the cockpit itself never spawns a process.
+
 ## Two coding-agent backends
 
 The engine picks a backend per agent via `coding_agent:` in the config (D1 in the plan):
