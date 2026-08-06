@@ -7,6 +7,13 @@
 > exists for it. When it lands, fold the relevant parts into the numbered guides and drop the
 > status note in [`docs/README.md`](../README.md).
 
+> **Revisit note (2026-08-06).** Re-verified against the current tree after the distribution
+> track landed. The design still stands and nothing is built (`SSSF_TRACE_ROOT`, `run_queue.target`,
+> and `.sandboxes/` are all absent). Two refinements from the now multi-project reality are folded
+> in below: the supervisor/worker layering — which turns out to *strengthen* the single-spawn-site
+> assumption, see [§ Multi-project](#multi-project--where-the-trace-root-comes-from) — and the
+> worktree **location** for stamped repos (Implementation § 2 and Open questions).
+
 ## Goal
 
 Run each ADW in **write-isolation** so multiple runs can be in flight without clobbering each
@@ -47,6 +54,23 @@ it the shared trace root; the observability paths absolutize against that root. 
 runs (CLI, or `target=local`) leave the signal unset → everything resolves against `cwd` as today
 → **byte-identical behavior**.
 
+## Multi-project — where the trace root comes from
+
+The distribution track added a **supervisor** (`adw_worker.py::supervise` / `_spawn_worker`) above
+the worker: it keeps one **worker** per `workerDesired` project alive, each spawned with
+`cwd=entry.root`. That is a new spawn site — but **not** a second *ADW* spawn site. The supervisor
+spawns *workers*; each worker still spawns ADWs through the single `spawn()` (`adw_worker.py:150`,
+`cwd=REPO_ROOT`). The worktree logic lives in `spawn()` and nowhere else — `_spawn_worker` needs
+**no** change.
+
+The reason it composes cleanly: `REPO_ROOT = git_helper.repo_root()` is resolved **per worker
+process at import** (`adw_worker.py:47`), so inside a supervised worker it already equals *that
+project's* root (the worker runs in `entry.root`). So the plan below is uniform across standalone
+(`just worker`) and supervised modes — `spawn()` sets `cwd=<worktree>` and
+`SSSF_TRACE_ROOT=REPO_ROOT`, and `REPO_ROOT` is the correct per-project trace root in both cases,
+with no per-mode branching. The one thing an implementer must not do is capture a single global
+"atelier root": always use the worker's own `REPO_ROOT`.
+
 ## Implementation plan
 
 ### 1. Engine — observability resolves against a shared trace root (the correctness fix)
@@ -61,14 +85,23 @@ runs (CLI, or `target=local`) leave the signal unset → everything resolves aga
 
 ### 2. Engine — worker gains a worktree execution mode (`adw_worker.py`)
 - Read `row["target"]` (add `target` to `_CLAIM_COLS` in `queue.py`).
-- `target == 'worktree'`: `git worktree add --detach .sandboxes/<adw_id> HEAD` → spawn with
-  `cwd=<worktree>`, `env` adding `SSSF_TRACE_ROOT=<repo_root>`, and absolutize `--config` to the
-  **real** repo config (so the sandbox reads live roster, not the worktree's HEAD copy). Store the
-  path on the `Job`.
+- `target == 'worktree'`: `git worktree add --detach <worktree-path> HEAD` → spawn with
+  `cwd=<worktree>`, `env` adding `SSSF_TRACE_ROOT=REPO_ROOT` (the worker's own root — see
+  [§ Multi-project](#multi-project--where-the-trace-root-comes-from)), and absolutize `--config` to
+  the **real** repo config (so the sandbox reads live roster, not the worktree's HEAD copy). Store
+  the path on the `Job`.
+- **Worktree location — decide before building (multi-project consequence).** A worktree created
+  *inside* the repo (`REPO_ROOT/.sandboxes/<adw_id>`) shows up as an untracked directory, so **every**
+  project — including stamped repos — would need `.sandboxes/` in its `.gitignore`, coupling this to
+  `install.py` (stamp the ignore) and to `update.py`. Prefer placing worktrees **outside** the project
+  tree, keyed by project — e.g. `~/.atelier/worktrees/<project-id>/<adw_id>` (or a temp dir). `git
+  rev-parse --show-toplevel` still returns the worktree wherever it lives, so `repo_root()` inside it
+  stays correct, and no project's `.gitignore` is touched. (If we *do* keep them in-repo, add
+  `.sandboxes/` to `.gitignore` here **and** teach `install.py` to stamp it.)
 - Teardown: `git worktree remove --force <path>` on terminal reap **and** on cancel-complete.
-  On startup, best-effort reap of stale `.sandboxes/*` worktrees from a crashed prior worker.
+  On startup, best-effort reap of stale worktrees from a crashed prior worker (`git worktree prune`
+  plus removing the run dirs).
 - `target == 'local'` (default): **unchanged** — today's exact behavior.
-- Add `.sandboxes/` to `.gitignore`.
 
 ### 3. Seam — new `run_queue.target` column (this is a seam change — follow the checklist)
 Add `target TEXT DEFAULT 'local'` and mirror it everywhere. This is exactly
@@ -97,6 +130,10 @@ work is at least findable.
 
 ## Open questions to settle on revisit
 
+- **Worktree location** *(new — from multi-project)* — outside the repo
+  (`~/.atelier/worktrees/<project-id>/<adw_id>`, no `.gitignore` coupling) vs in-repo
+  (`REPO_ROOT/.sandboxes/`, needs the ignore stamped into every project via `install.py`). Leaning
+  **outside**. Settle this first — it drives whether `install.py`/`update.py` are in scope at all.
 - **Env var name** — `SSSF_TRACE_ROOT` is the working name; confirm or pick another.
 - **Default target** — row default `'local'` (byte-identical to today), worktree opt-in per run.
   Do we also want a config-level default? Probably not for the first slice.
@@ -109,10 +146,14 @@ work is at least findable.
 
 1. `cd cockpit && pnpm typecheck && pnpm check:contract && pnpm build` (contract now covers `target`).
 2. Enqueue two `target=worktree` runs, `just worker --concurrency 2`; confirm each gets its own
-   `.sandboxes/<adw_id>`, **both traces land in the shared `sssf.db`**, worktrees are removed on
-   completion, and cancel tears down cleanly.
+   worktree, **both traces land in the shared `sssf.db`**, worktrees are removed on completion, and
+   cancel tears down cleanly.
 3. Confirm a `target=local` run is byte-identical to today (no `SSSF_TRACE_ROOT`, no worktree).
-4. `/code-review high` on the diff before landing.
+4. **Supervised mode** — run one `target=worktree` job under `adw_worker.py --supervise` for a
+   *stamped* project; confirm its trace lands in that project's own `sssf.db` (i.e. `SSSF_TRACE_ROOT`
+   resolved to the worker's `REPO_ROOT`, not the atelier root) and no stray `.sandboxes/` dir is left
+   in the project tree.
+5. `/code-review high` on the diff before landing.
 
 ## References
 
