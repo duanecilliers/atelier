@@ -12,7 +12,7 @@ of truth.** The engine writes the live trace; the cockpit reads it back.
 ```
 ┌──────────┐   writes    ┌─────────────────────────────┐   reads (readonly, WAL)   ┌──────────┐
 │  engine  │ ──────────▶ │  engine/adws/adw_data/sssf.db │ ◀──────────────────────── │ cockpit  │
-│ (Python) │             │   7 tables · the contract     │                           │ (Next.js)│
+│ (Python) │             │   9 tables · the contract     │                           │ (Next.js)│
 └──────────┘             └─────────────────────────────┘                           └──────────┘
 ```
 
