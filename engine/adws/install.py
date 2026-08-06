@@ -13,15 +13,17 @@ target at the native `adws/` layout (no `engine/` prefix):
 
 What lands, and why the buckets matter for updates (see update.py):
 
-  MANAGED  — adws/adw_modules/*.py and adws/adw_*.py. Pure code Atelier owns.
-             Recorded in .atelier/manifest.json (path -> sha256). The updater
-             keeps these current; a new module or ADW is DISCOVERED by scanning
-             engine/adws/, so it stamps automatically with no registry to edit.
+  MANAGED  — adws/adw_modules/*.py and adws/adw_*.py (pure engine code), plus the
+             operator skill .claude/skills/atelier/** (its docs must track engine
+             behavior). Recorded in .atelier/manifest.json (path -> sha256). The
+             updater keeps these current; a new module, ADW, or skill file is
+             DISCOVERED by scanning engine/adws/ and engine/skills/, so it stamps
+             automatically with no registry to edit.
   USER     — adws/adw_sssf_config/sssf.config.yaml, adws/adw_data/prompt_engineering/**,
              the justfile, .env.sample. Stamped ONCE and never in the manifest,
              so the updater never touches them — and anything YOU add later
-             (custom ADWs, prompts, skills) is simply not in the manifest either,
-             so it is invisible to updates by construction.
+             (custom ADWs, prompts, your own skills) is simply not in the manifest
+             either, so it is invisible to updates by construction.
   RUNTIME  — adws/adw_data/sessions/, sssf.db*. Gitignored, never stamped.
 
 Idempotent by refusal: install is the FIRST stamp. If .atelier/manifest.json
@@ -63,6 +65,12 @@ def source_adws() -> Path:
     return Path(__file__).resolve().parent
 
 
+def source_skills(source: Path) -> Path:
+    """The live operator-skill payload: engine/skills, sibling to engine/adws.
+    Stamped into the target's .claude/skills/ and kept current like any managed code."""
+    return source.parent / "skills"
+
+
 def atelier_version(source: Path) -> str:
     """The Atelier checkout's git sha at stamp time — the manifest's provenance."""
     out = subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD"],
@@ -72,20 +80,32 @@ def atelier_version(source: Path) -> str:
 
 def managed_files(source: Path) -> list[Path]:
     """The managed set, DISCOVERED by scanning (never a hardcoded list): every
-    adw_modules/*.py plus every top-level adw_*.py (incl. adw_worker.py). Adding
-    a module or ADW to the engine adds it here automatically."""
+    adw_modules/*.py plus every top-level adw_*.py (incl. adw_worker.py), plus every
+    file in the operator skill under engine/skills/. Adding a module, ADW, or skill
+    file to the engine adds it here automatically."""
     files: list[Path] = []
     modules = source / "adw_modules"
     if modules.is_dir():
         files += [p for p in modules.rglob("*.py") if "__pycache__" not in p.parts]
     files += list(source.glob("adw_*.py"))
-    # Stable order → stable manifest diffs.
-    return sorted(files, key=lambda p: p.relative_to(source).as_posix())
+    skills = source_skills(source)
+    if skills.is_dir():
+        files += [p for p in skills.rglob("*")
+                  if p.is_file() and "__pycache__" not in p.parts]
+    # Stable order → stable manifest diffs. Key on the TARGET path since skill files
+    # live outside `source` and can't be made relative to it.
+    return sorted(files, key=lambda p: target_rel(source, p))
 
 
 def target_rel(source: Path, f: Path) -> str:
-    """engine/adws/adw_modules/x.py -> adws/adw_modules/x.py (native layout)."""
-    return (Path("adws") / f.relative_to(source)).as_posix()
+    """Map a live payload file to its target-relative path (native layout):
+      engine/adws/adw_modules/x.py    -> adws/adw_modules/x.py
+      engine/skills/atelier/SKILL.md  -> .claude/skills/atelier/SKILL.md"""
+    skills = source_skills(source)
+    try:
+        return (Path(".claude/skills") / f.relative_to(skills)).as_posix()
+    except ValueError:
+        return (Path("adws") / f.relative_to(source)).as_posix()
 
 
 def sha256_file(path: Path) -> str:

@@ -79,8 +79,8 @@ What lands, and why the buckets matter for updates:
 
 | Bucket    | What                                                                       | On update |
 | --------- | -------------------------------------------------------------------------- | --------- |
-| MANAGED   | `adws/adw_modules/*.py`, `adws/adw_*.py` — engine code Atelier owns         | kept current (hashed in `.atelier/manifest.json`) |
-| USER      | `adws/adw_sssf_config/sssf.config.yaml`, prompts, the justfile, `.env.sample` | stamped once, never touched again |
+| MANAGED   | `adws/adw_modules/*.py`, `adws/adw_*.py` — engine code Atelier owns — plus the `/atelier` operator skill (`.claude/skills/atelier/**`) | kept current (hashed in `.atelier/manifest.json`) |
+| USER      | `adws/adw_sssf_config/sssf.config.yaml`, prompts, the justfile, `.env.sample`, your own ADWs/skills | stamped once, never touched again |
 | RUNTIME   | `adws/adw_data/sessions/`, `sssf.db*`                                       | gitignored, never stamped |
 
 Install is **idempotent by refusal**: if `.atelier/manifest.json` already exists it
@@ -96,6 +96,18 @@ just sessions                  # the justfile is stamped in; the trace lands in 
 
 Before running build/test ADWs, edit the stamped `sssf.config.yaml`'s `quality:` /
 `verify:` block to match the target's own test/lint commands.
+
+**The `/atelier` operator skill.** Every stamp also lands a Claude Code skill at
+`.claude/skills/atelier/` — the operator manual for driving the factory *in that repo*
+(run / create / update ADWs, tune the roster, observe runs), with cookbooks and references
+written for the native `adws/` layout. Its single source is `engine/skills/atelier/`
+(symlinked into this checkout as `.claude/skills/atelier`, so `/atelier` works here too — the
+skill is layout-aware and translates `adws/` → `engine/adws/` when it detects the source repo).
+It is **MANAGED**, so `update.py` keeps its docs in lockstep with engine behavior; a cookbook
+you hand-edit is parked as `<file>.atelier-new`, never clobbered. Claude Code autoloads it;
+other agent harnesses (codex, cursor, pi) don't scan `.claude/skills/`, so point their own
+rules file at `.claude/skills/atelier/SKILL.md` rather than copying it (a copy drifts, and a
+pointer in `AGENTS.md`/`CLAUDE.md` would leak into the ADW coding agents via guidance injection).
 
 **Pull later engine improvements** — reconciled per file by content hash; your edits are
 never clobbered (a conflict is written beside the file as `<file>.atelier-new`):

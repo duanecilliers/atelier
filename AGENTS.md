@@ -129,6 +129,25 @@ byte-for-byte identical to a CLI one (same trace, same acceptance). Cancel = SIG
 process group; the ADW's own signal handler (`session.py::_finalize_when_killed`) closes its
 trace. Keep this invariant when extending either side.
 
+### The operator skill (`engine/skills/atelier/`) — stamped, MANAGED
+
+`engine/skills/atelier/` is the Claude Code **operator skill** for driving the factory (run /
+create / update ADWs, tune the roster, observe runs) — one `SKILL.md` router plus cookbooks
+and references written for the native `adws/` layout. It is the **single source**: the Atelier
+checkout exposes it as `.claude/skills/atelier` (a symlink → `engine/skills/atelier`, so
+`/atelier` works here too), and `install.py` **stamps a copy into each target's
+`.claude/skills/atelier/`**. It is discovered like any managed code — `managed_files()` /
+`target_rel()` in `install.py` now scan `engine/skills/` and map it under `.claude/skills/` —
+so it lands in `.atelier/manifest.json` and `update.py` keeps its docs in lockstep with engine
+behavior (a hand-edited cookbook is parked as `<file>.atelier-new`, never clobbered). The skill
+is **layout-aware**: it detects the source repo (no top-level `adws/`, but `engine/adws/`) and
+translates paths. When engine behavior changes in a way the skill documents (backends, gates,
+config schema, observability), update `engine/skills/atelier/` in the same change — it is
+MANAGED for exactly this reason. Other agent harnesses (codex/cursor/pi) don't scan
+`.claude/skills/`; surface the skill to them via their own rules file pointing at
+`.claude/skills/atelier/SKILL.md`, **not** by copying it and **not** via `AGENTS.md`/`CLAUDE.md`
+(that leaks operator instructions into ADW coding agents through `project_guidance` injection).
+
 ## Pull requests
 
 - Do **not** include the `🤖 Generated with [Claude Code](https://claude.com/claude-code)`
