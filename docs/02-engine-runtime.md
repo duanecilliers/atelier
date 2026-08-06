@@ -323,7 +323,7 @@ there's no batching — every call is an individual autocommit `execute`.
 
 ## 6. The trace schema
 
-Eight tables total: six defined in `tracer.py`'s `SCHEMA` (`tracer.py:18-91`) plus
+Nine tables total: seven defined in `tracer.py`'s `SCHEMA` (`tracer.py:18-91`) plus
 `run_queue`, appended from `queue.py`, and `workers`, appended from `workers.py`
 (`SCHEMA = """...""" + RUN_QUEUE_DDL + WORKERS_DDL`).
 
