@@ -2,7 +2,7 @@
 
 A workshop where **agents propose and deterministic code disposes**. Atelier marries
 the determinism of the [Super-Simple Software Factory](https://github.com/) (the ADW
-engine) with an operator-console cockpit lifted from FounderOS's "Monolith Signal"
+engine) with an operator-console cockpit lifted from [FounderOS](https://github.com/Bennettxai/FounderOS-DEMO)'s "Monolith Signal"
 design system. Agents run inside bounded phases; deterministic Python decides
 sequencing and acceptance; every event streams to a UI you can watch.
 
