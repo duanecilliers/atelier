@@ -84,10 +84,13 @@ client component can import them without dragging `node:fs` into the bundle).
 - `claude_code` → `agent_cc.py`, drives Claude via `claude-agent-sdk` using the local `claude`
   CLI's own login (**no API key**). `agent_cc.run` mirrors `agent_pi.run`'s contract exactly.
 
-**Machine gotcha:** pi's Anthropic OAuth is expired here, so pi can only run `openai-codex/*`
-models — that's *why* Claude agents go through the SDK. A run routing an `anthropic/*` model
-through `coding_agent: pi` will fail. Also, `pi` 0.81.1 has no `~/.pi/agent/models.json`, so
-`engine/.env` sets `PI_MODELS_PATH` to a committed stub.
+**Anthropic is always routed through the SDK.** pi no longer supports Anthropic, so
+`agents.py::load_config` **forces `coding_agent: claude_code` for any `anthropic/*` model**,
+overriding whatever the roster says — pi only ever runs non-Anthropic models (e.g.
+`openai-codex/*`). A roster can't mis-route Anthropic: a stray `coding_agent: pi` on an
+`anthropic/*` agent is silently corrected to `claude_code` at load. Also, `pi` 0.81.1 has no
+`~/.pi/agent/models.json`, so `engine/.env` sets `PI_MODELS_PATH` to a committed stub (and
+`agent_pi.context_window()` degrades to 0/unknown when even that is absent, e.g. a stamped repo).
 
 ### Cockpit (`cockpit/`) — Next.js 14 App Router, observe + control
 

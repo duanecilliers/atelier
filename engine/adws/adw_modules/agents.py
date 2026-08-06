@@ -38,6 +38,14 @@ def load_config(path: str = "adws/adw_sssf_config/sssf.config.yaml") -> SSSFConf
             if key in defaults:
                 agent.setdefault(key, defaults[key])
         agent.setdefault("harness_engineering", defaults.get("harness_engineering", []))
+        # pi no longer supports Anthropic, so an anthropic/* model can ONLY run
+        # through the Claude Agent SDK (claude_code, which uses the local `claude`
+        # CLI's own login — no key). Enforce it here, after the defaults merge so it
+        # also catches agents that inherit an anthropic model: no roster — not even
+        # a stale `coding_agent: pi` — can mis-route Anthropic to a backend that
+        # would fail at dispatch.
+        if str(agent.get("model", "")).startswith("anthropic/"):
+            agent["coding_agent"] = "claude_code"
     return SSSFConfig(**raw)
 
 

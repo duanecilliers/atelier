@@ -141,13 +141,13 @@ session resume) so `agents.execute()` treats both identically.
 **Current roster:** scout → `anthropic/claude-haiku-4-5` (Claude SDK); builder →
 `openai-codex/gpt-5.6-sol` (pi); planner → `anthropic/claude-fable-5`.
 
-> ⚠️ **pi's Anthropic OAuth is expired on this machine** ("OAuth refresh failed for
-> anthropic"), so pi can only run `openai-codex/*` models. That's *why* Claude agents
-> go through the SDK — it uses the `claude` CLI's own working login, no API key needed.
-> The **planner** (`anthropic/claude-fable-5`) still uses `coding_agent: pi`, so
-> plan/build chains need either pi Anthropic re-auth **or** switching the planner to
-> `coding_agent: claude_code`. Also: `pi` 0.81.1 has no `~/.pi/agent/models.json`, so
-> `engine/.env` points `PI_MODELS_PATH` at a local stub.
+> ⚠️ **pi no longer supports Anthropic.** So `agents.py::load_config` **forces
+> `coding_agent: claude_code` for any `anthropic/*` model**, regardless of the roster —
+> Claude always goes through the SDK (the `claude` CLI's own login, no API key), and pi
+> only ever runs non-Anthropic models. A stray `coding_agent: pi` on an `anthropic/*`
+> agent is corrected at load, so no roster can mis-route it. Also: `pi` 0.81.1 has no
+> `~/.pi/agent/models.json`, so `engine/.env` points `PI_MODELS_PATH` at a local stub
+> (and `context_window()` degrades to unknown when even that is absent, e.g. a stamped repo).
 
 ## Build status
 

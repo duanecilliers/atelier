@@ -686,23 +686,17 @@ export interface RosterWarning {
 }
 
 /**
- * Non-fatal config smells the operator should see. Today: an `anthropic/*` model
- * routed through `coding_agent: pi` — pi's Anthropic OAuth is expired on this
- * machine, so such a run fails at dispatch. It's an advisory, not a block: the
- * config file is allowed to express it (a re-auth would make it valid), so we
- * surface it and let the operator decide. See AGENTS.md "Machine gotcha".
+ * Non-fatal config smells the operator should see.
+ *
+ * There is deliberately NO "anthropic model on coding_agent: pi" warning: pi no
+ * longer supports Anthropic, so the engine (agents.py::load_config) now forces
+ * every `anthropic/*` model through claude_code regardless of the configured
+ * backend. The mis-route it used to warn about can no longer happen, so warning
+ * about it would be a false positive.
  */
 export function rosterWarnings(cfg: RosterConfig): RosterWarning[] {
   const out: RosterWarning[] = [];
   for (const a of cfg.agents) {
-    const backend = a.coding_agent || cfg.defaults.coding_agent;
-    const model = a.model || cfg.defaults.model;
-    if (backend === 'pi' && model.startsWith('anthropic/')) {
-      out.push({
-        agent: a.name,
-        message: `backend "pi" runs model "${model}" — pi's Anthropic OAuth is expired here; route anthropic/* through claude_code.`,
-      });
-    }
     // An agent that loads a harness extension but has no explicit `tools` list
     // inherits defaults.tools (agents.py::load_config), which never names the
     // extension's tools — so pi filters them out and the extension is dead
