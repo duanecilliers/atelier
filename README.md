@@ -199,3 +199,12 @@ Every view reads live from the shared `sssf.db`, in FounderOS's "Monolith Signal
 ![Gate health: pass rate and retries per gate across the recent run window](docs/screenshots/cockpit-gates.png)
 
 ![Cost dashboard: total spend and tokens grouped by model, with share bars](docs/screenshots/cockpit-cost.png)
+
+## License
+
+Atelier is released under the [MIT License](LICENSE).
+
+It builds on two MIT-licensed projects, retained under their own MIT terms:
+
+- **Super-Simple Software Factory (SSSF)** — the ADW engine (`disler/sssf`)
+- **[FounderOS](https://github.com/Bennettxai/FounderOS-DEMO)** — the "Monolith Signal" cockpit design system
