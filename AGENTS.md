@@ -84,6 +84,13 @@ client component can import them without dragging `node:fs` into the bundle).
 - `claude_code` → `agent_cc.py`, drives Claude via `claude-agent-sdk` using the local `claude`
   CLI's own login (**no API key**). `agent_cc.run` mirrors `agent_pi.run`'s contract exactly.
 
+**Project guidance reaches every agent.** So an agent working in a *stamped* repo sees that
+project's conventions: `pi` discovers `AGENTS.md`/`CLAUDE.md` from cwd natively, and because the
+Claude SDK runs in isolation mode (`agent_cc.py` sets `setting_sources: []` — no ambient
+CLAUDE.md/skills leaking in), `agents.py::execute` injects the repo-root guidance
+(`agents.project_guidance` — `AGENTS.md`, else `CLAUDE.md`) into a `claude_code` agent's system
+prompt explicitly. Deterministic and leak-free: exactly one engine-chosen file, nothing else.
+
 **Anthropic is always routed through the SDK.** pi no longer supports Anthropic, so
 `agents.py::load_config` **forces `coding_agent: claude_code` for any `anthropic/*` model**,
 overriding whatever the roster says — pi only ever runs non-Anthropic models (e.g.
