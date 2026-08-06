@@ -12,13 +12,13 @@ must not break), see [`AGENTS.md`](../AGENTS.md) at the repo root — this set i
 companion to it, not a replacement.
 
 > **Status.** These guides describe `main` as it currently stands. The factory is built
-> phase-by-phase from the locked roadmap in [`atelier-plan.html`](atelier-plan.html). Two items are
-> still in design and **not yet implemented**, so they are intentionally absent from these guides:
-> **sandbox / isolated runs** (running each ADW in its own throwaway git worktree for parallel-write
-> isolation) — see the [design note](design/sandbox-runs.md); and **distribution** (making the
-> engine stampable into any repo, updatable from Atelier, plus a multi-project cockpit and worker
-> supervisor) — see the [design note](design/atelier-distribution.md). This page will grow when they
-> land.
+> phase-by-phase from the locked roadmap in [`atelier-plan.html`](atelier-plan.html).
+> **Distribution** has landed — the engine is stampable into any repo, updatable from Atelier, with
+> a multi-project cockpit and a worker supervisor — and is documented in
+> [09-distribution.md](09-distribution.md). One item is still in design and **not yet implemented**,
+> so it is intentionally absent from these guides: **sandbox / isolated runs** (running each ADW in
+> its own throwaway git worktree for parallel-write isolation) — see the
+> [design note](design/sandbox-runs.md). This page will grow when it lands.
 
 ## Start here
 
@@ -41,6 +41,7 @@ New to the system? Read these two, in order — everything else assumes their vo
 | 06 | [The cockpit](06-cockpit.md) | The Next.js app: routes, the `lib/` layer, the three live (SSE) paths, the design system, and the read/write surfaces. |
 | 07 | [Operations](07-operations.md) | Commands, the worker & `run_queue` lifecycle, environment variables, self-build guardrails. |
 | 08 | [Extending the system](08-extending-the-system.md) | End-to-end recipes: add an ADW, an agent, a gate, an envelope, a seam column, a cockpit view — and how to point the factory at its own repo. |
+| 09 | [Distribution](09-distribution.md) | Stamping the engine into any repo (`install.py`), updating it safely (`update.py` + manifest), the `/atelier` operator skill, the multi-project cockpit, and the `--supervise` worker supervisor + `workers` heartbeat. |
 
 ## "I want to…"
 
@@ -54,6 +55,8 @@ New to the system? Read these two, in order — everything else assumes their vo
 | Add a cockpit page or query | [The cockpit](06-cockpit.md) · recipe in [Extending](08-extending-the-system.md#recipe-f--add-a-cockpit-view-or-query) |
 | Change the trace schema (the seam) | [Extending → Recipe E](08-extending-the-system.md#recipe-e--add-a-column-to-a-trace-table-or-run_queue) — **read the checklist first** |
 | Use the factory to build the factory | [Extending → Using Atelier to extend itself](08-extending-the-system.md#using-atelier-to-extend-itself) |
+| Stamp the engine into another repo / update a stamped repo | [Distribution](09-distribution.md) |
+| Observe many repos from one cockpit / run the supervisor | [Distribution → multi-project](09-distribution.md#6-the-multi-project-cockpit) |
 
 ## Related, non-guide references
 

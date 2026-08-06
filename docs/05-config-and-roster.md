@@ -57,7 +57,27 @@ Notes:
   — those tool names must also appear in the agent's own `tools` list (§6).
 - **There is no tester agent.** Running the test suite is a known deterministic
   command, so it's a `kind="code"` phase over `adw_modules/quality.py`, not an agent
-  call. See [03-agents-and-gates.md](03-agents-and-gates.md).
+  call. The commands it runs come from the `quality:` block below. See
+  [03-agents-and-gates.md](03-agents-and-gates.md).
+
+### `quality:` — the deterministic verify commands
+
+The verify/test commands a quality phase runs, as **data the operator owns**, not code. Each
+entry maps a name to `{ argv, timeout?, area?, operation? }`; `quality.py` builds its block list
+from this map in file order. Omitting a block skips it; an **empty or absent `quality:` runs
+nothing and says so** — the honest replacement for hardcoded fake-green echoes. The map key `test`
+is the one the deterministic test phase runs alone.
+
+```yaml
+quality:
+  typecheck: { argv: ["pnpm", "--dir", "cockpit", "typecheck"], area: frontend, operation: typecheck }
+  contract:  { argv: ["pnpm", "--dir", "cockpit", "check:contract"], area: frontend }
+  # test:    { argv: ["uv", "run", "pytest", "-q"], timeout: 600 }   # Atelier has no unit suite
+```
+
+This is the change that made stamped-repo updates clean (distribution **Part B**): moving the
+per-repo commands out of the managed `quality.py` and into the config the updater never touches, so
+`quality.py` is purely managed code. See [09-distribution.md](09-distribution.md) §5.
 
 ---
 
@@ -113,12 +133,26 @@ the YAML overrides these defaults, so the discrepancy is latent.
 | `db` | `str` | `"adws/adw_data/sssf.db"` |
 | `poll_ms` | `int` | `500` |
 
+### `QualityCheckConfig`
+
+One entry in the `quality:` map (the map key is the check's name).
+
+| Field | Type | Default |
+|---|---|---|
+| `argv` | `list[str]` | — (validated non-empty — a check with no command is a config typo) |
+| `timeout` | `int` (seconds) | `120` |
+| `area` | `QualityArea` | `"backend"` (trace classifier) |
+| `operation` | `QualityOperation` | `"build"` (trace classifier) |
+
+`to_spec(name)` adapts one entry into the `QualityCheckSpec` that `quality._run()` executes.
+
 ### `SSSFConfig` — the root model
 
 | Field | Type | Default |
 |---|---|---|
 | `defaults` | `ConfigDefaults` | `ConfigDefaults()` |
 | `observability` | `ObservabilityConfig` | `ObservabilityConfig()` |
+| `quality` | `dict[str, QualityCheckConfig]` | `{}` (empty = no checks run) |
 | `agents` | `list[AgentConfig]` | `[]` |
 
 ---
@@ -243,10 +277,13 @@ inside the determinism spine: writing it spawns no process and mutates no run's 
 Pydantic at run time regardless of what the cockpit wrote.
 
 - `RosterConfigSchema` (Zod) mirrors `SSSFConfig`/`ConfigDefaults`/
-  `ObservabilityConfig`/`AgentConfig` field-for-field, plus two extra checks the
-  Pydantic side doesn't enforce: a `model` must look like `provider/id`, and `color`
+  `ObservabilityConfig`/`AgentConfig`/`QualityCheckConfig` field-for-field, plus two extra checks
+  the Pydantic side doesn't enforce: a `model` must look like `provider/id`, and `color`
   must be 3/6-digit hex or empty. `coding_agent`/`thinking` are constrained to enums
-  from `roster-constants.ts` rather than bare strings.
+  from `roster-constants.ts` rather than bare strings. This mirror is kept in lockstep **by hand**
+  — `pnpm check:contract` covers db tables, not the config file, so a `quality:` schema change must
+  be mirrored in `roster.ts` (and `roster-constants.ts` for its `area`/`operation` vocabularies)
+  manually.
 - **The editable surface is narrower than the full mirror**: scalars (`model`,
   `coding_agent`, `thinking`, `color`, `purpose` per agent; `model`, `coding_agent`,
   `thinking` on defaults) plus the two security-boundary arrays (`tools` per

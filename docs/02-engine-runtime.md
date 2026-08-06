@@ -323,8 +323,9 @@ there's no batching — every call is an individual autocommit `execute`.
 
 ## 6. The trace schema
 
-Seven tables total: six defined in `tracer.py`'s `SCHEMA` (`tracer.py:18-91`) plus
-`run_queue`, appended from `queue.py`.
+Eight tables total: six defined in `tracer.py`'s `SCHEMA` (`tracer.py:18-91`) plus
+`run_queue`, appended from `queue.py`, and `workers`, appended from `workers.py`
+(`SCHEMA = """...""" + RUN_QUEUE_DDL + WORKERS_DDL`).
 
 **`sessions`**
 
@@ -442,6 +443,25 @@ Seven tables total: six defined in `tracer.py`'s `SCHEMA` (`tracer.py:18-91`) pl
 `ensure_schema`, `claim_next` (atomic claim via a guarded `UPDATE ... WHERE status='queued'`),
 `mark_running`, `mark_terminal`, `cancel_requested` — not part of the `Tracer` class itself
 but part of the same seam.
+
+**`workers`** (DDL owned by `workers.py`, appended after `run_queue`) — the per-project worker
+liveness heartbeat. Each `adw_worker.py` upserts a row every poll into its **own** repo's
+`sssf.db`, so the heartbeat stays per-project; the cockpit reads the freshest `last_seen_at` to say,
+honestly, whether a worker is attached ("no worker attached" is a real state, not a guess). Written
+by the worker, read by the cockpit — engine-owned, like `processes`. See
+[09-distribution.md](09-distribution.md) §7 for the supervisor that drives it.
+
+| column | type |
+| --- | --- |
+| `host` | TEXT — machine the worker runs on |
+| `pid` | INTEGER — the worker process id (`os.getpid`) |
+| `started_at` | TEXT — when this worker began draining (fixed for its life) |
+| `last_seen_at` | TEXT — refreshed every poll; freshness = attached |
+| PRIMARY KEY | `(host, pid)` |
+
+`workers.py` also exposes the worker-side helpers `ensure_schema`, `identity` (`(host, pid)`),
+`heartbeat` (the per-poll upsert), `clear` (drop this row on graceful exit), and `clear_host` (sweep
+a crashed predecessor's rows at startup) — part of the same seam, not the `Tracer` class.
 
 Per [AGENTS.md](../AGENTS.md), this schema is mirrored in the cockpit at
 `cockpit/lib/types.ts` (row interfaces) and `cockpit/lib/schemas.ts` (Zod validators +
