@@ -38,6 +38,30 @@ def operator_env() -> dict[str, str]:
     return env
 
 
+def trace_root() -> Path:
+    """Where the observability sink (sssf.db, session dirs, JSONL) anchors.
+
+    A sandboxed run executes with cwd = its worktree, so a relative db/data_dir
+    path from the config would otherwise resolve INTO the worktree — the cockpit
+    would then see nothing. The worker sets SSSF_TRACE_ROOT to the real repo root
+    so the trace lands where the reader is. Unset (every CLI run today) → cwd, so
+    paths resolve exactly as before: byte-identical behaviour.
+    """
+    return Path(os.environ.get("SSSF_TRACE_ROOT") or Path.cwd())
+
+
+def resolve_trace_path(path: str | Path) -> Path:
+    """Absolutize an observability path against trace_root().
+
+    An already-absolute path is returned untouched; a relative one (the config's
+    `db:`/`data_dir:`) is anchored at trace_root(). This is the ONE fix the
+    sandbox design needs — the execution surface (agent cwd, diff, commit) is
+    correctly the worktree via repo_root(); only the sink must stay anchored.
+    """
+    p = Path(path)
+    return p if p.is_absolute() else trace_root() / p
+
+
 def new_id(length: int = 8) -> str:
     return secrets.token_hex(length // 2)
 

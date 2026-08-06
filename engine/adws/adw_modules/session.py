@@ -15,7 +15,7 @@ from pathlib import Path
 from .data_types import SSSFConfig
 from .runner import Run
 from .tracer import Tracer
-from .utils import engineer_name, new_id
+from .utils import engineer_name, new_id, resolve_trace_path
 
 
 def _finalize_when_killed(run: Run) -> None:
@@ -37,8 +37,11 @@ def _finalize_when_killed(run: Run) -> None:
 
 def ensure(cfg: SSSFConfig, adw_id: str | None = None) -> Run:
     adw_id = adw_id or new_id(8)
-    tracer = Tracer(cfg.observability.db,
-                    f"{cfg.defaults.data_dir}/sessions/{adw_id}/events.jsonl")
+    # Anchor the sink (db + JSONL) at trace_root(): unset → cwd, exactly as before;
+    # under a sandbox run the worker sets SSSF_TRACE_ROOT to the real repo so the
+    # trace lands beside the cockpit reader, not inside the worktree cwd.
+    tracer = Tracer(resolve_trace_path(cfg.observability.db),
+                    resolve_trace_path(f"{cfg.defaults.data_dir}/sessions/{adw_id}/events.jsonl"))
     run = Run(cfg=cfg, adw_id=adw_id, tracer=tracer, engineer=engineer_name())
     tracer.session_start(adw_id, run.engineer, adw_name=Path(sys.argv[0]).stem)
     # This process is the run. Record it before any phase opens, so a run that

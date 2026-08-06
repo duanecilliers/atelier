@@ -16,7 +16,7 @@ from pathlib import Path
 from . import agents, git_helper
 from .console import Console
 from .data_types import AgentCall, EnvelopeBase, EventRecord, Phase, PhaseParams
-from .utils import ensure_dir, now_iso
+from .utils import ensure_dir, now_iso, resolve_trace_path
 
 
 class PhaseHandle:
@@ -51,7 +51,11 @@ class Run:
         self.cost = 0.0
         self._seq = tracer.max_phase_seq(adw_id)   # a joined run continues the sequence
         self.repo_root = git_helper.repo_root()    # where every agent is spawned to work
-        self.session_dir = ensure_dir(Path(cfg.defaults.data_dir) / "sessions" / adw_id)
+        # The session dir is part of the observability sink, so it anchors at
+        # trace_root() (SSSF_TRACE_ROOT or cwd), NOT at repo_root — under a sandbox
+        # run repo_root is the worktree but the sink must stay by the shared db.
+        self.session_dir = ensure_dir(resolve_trace_path(
+            Path(cfg.defaults.data_dir) / "sessions" / adw_id))
         self.context_handoff_dir = ensure_dir(self.session_dir / "context_handoff")
         self._agent_map_path = self.session_dir / "agent_map.json"
         self.agent_map: dict = (json.loads(self._agent_map_path.read_text())

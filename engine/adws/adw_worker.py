@@ -35,7 +35,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from adw_modules import agents, git_helper, queue, registry, workers
+from adw_modules import agents, git_helper, queue, registry, sandboxes, workers
 from adw_modules.utils import ensure_dir, now_iso
 
 # The repo (git) root every ADW is launched in, so its relative config paths and
@@ -115,8 +115,21 @@ class Job:
     row: sqlite3.Row
     proc: subprocess.Popen
     log: object  # open file handle for the child's stdout/stderr
+    sandbox_id: str | None = None   # the sandbox this run is bound to (serializes per sandbox)
+    worktree_path: str | None = None  # its worktree, so we can read tip_sha when the run ends
     canceling: bool = False
     kill_deadline: float | None = field(default=None)
+
+
+# Persistent sandbox worktrees live OUTSIDE the repo (no .gitignore churn, and
+# show-toplevel still resolves inside them), namespaced by project + sandbox id.
+WORKTREES_ROOT = Path.home() / ".atelier" / "worktrees"
+
+
+def worktree_path_for(sandbox_id: str) -> Path:
+    """Where this worker puts a sandbox's worktree: ~/.atelier/worktrees/<project>/<id>.
+    Namespaced by REPO_ROOT's name so two projects' sandboxes never collide."""
+    return WORKTREES_ROOT / REPO_ROOT.name / sandbox_id
 
 
 def connect(db_path: str) -> sqlite3.Connection:
@@ -129,12 +142,12 @@ def connect(db_path: str) -> sqlite3.Connection:
     return conn
 
 
-def build_argv(row: sqlite3.Row, worker_config: str) -> list[str] | None:
-    """The CLI argv for a queued row, or None if adw_name is not a valid script."""
+def build_argv(row: sqlite3.Row, config: str) -> list[str] | None:
+    """The CLI argv for a queued row, or None if adw_name is not a valid script.
+    `config` is the already-resolved roster path (absolute for a sandbox run)."""
     adw_name = (row["adw_name"] or "").strip()
     if not ADW_NAME_RE.match(adw_name):
         return None
-    config = row["config"] or worker_config
     script = script_for(adw_name, config)
     if script is None:
         return None
@@ -147,21 +160,40 @@ def build_argv(row: sqlite3.Row, worker_config: str) -> list[str] | None:
     return argv
 
 
-def spawn(row: sqlite3.Row, worker_config: str, data_dir: str) -> Job | None:
-    """Launch the ADW in its own process group, logging to the run's session dir."""
-    argv = build_argv(row, worker_config)
+def spawn(row: sqlite3.Row, worker_config: str, data_dir: str,
+          worktree_path: str | None = None) -> Job | None:
+    """Launch the ADW in its own process group, logging to the run's session dir.
+
+    A local run (worktree_path None) runs with cwd=REPO_ROOT and inherits the
+    worker's env — byte-for-byte identical to today. A SANDBOX run runs with
+    cwd=<worktree> (the execution surface repo_root() resolves to) but is told
+    SSSF_TRACE_ROOT=REPO_ROOT so its trace still lands in the shared db, and its
+    --config is absolutized to the REAL repo so roster/db/quality come from the
+    engine, not whatever the sandbox branch happens to carry.
+    """
+    config = row["config"] or worker_config
+    cwd = REPO_ROOT
+    env = None
+    if worktree_path:
+        cwd = Path(worktree_path)
+        if not Path(config).is_absolute():
+            config = str((REPO_ROOT / config).resolve())
+        env = os.environ.copy()
+        env["SSSF_TRACE_ROOT"] = str(REPO_ROOT)
+    argv = build_argv(row, config)
     if argv is None:
         return None
     session_dir = ensure_dir(REPO_ROOT / data_dir / "sessions" / row["adw_id"])
     log = open(session_dir / "worker.log", "a", buffering=1)
-    log.write(f"\n$ {' '.join(argv)}\n")
+    log.write(f"\n$ (cwd={cwd}) {' '.join(argv)}\n")
     # start_new_session=True → the child leads its own process group, so a cancel
     # signals the whole ADW + its agent children, not just `uv`.
     proc = subprocess.Popen(
-        argv, cwd=str(REPO_ROOT), stdout=log, stderr=subprocess.STDOUT,
-        start_new_session=True,
+        argv, cwd=str(cwd), stdout=log, stderr=subprocess.STDOUT,
+        start_new_session=True, env=env,
     )
-    return Job(queue_id=row["id"], row=row, proc=proc, log=log)
+    return Job(queue_id=row["id"], row=row, proc=proc, log=log,
+               sandbox_id=row["sandbox_id"], worktree_path=worktree_path)
 
 
 def signal_group(proc: subprocess.Popen, sig: int) -> None:
@@ -170,6 +202,64 @@ def signal_group(proc: subprocess.Popen, sig: int) -> None:
         os.killpg(os.getpgid(proc.pid), sig)
     except (ProcessLookupError, PermissionError):
         pass
+
+
+# ── sandbox reconciliation ──────────────────────────────────────────────────
+# The worker is the ONLY thing that turns sandbox intent (a `sandboxes` row) into
+# a real worktree, exactly as it is the only thing that turns a run_queue row into
+# a process. The cockpit requests (INSERT) and asks for teardown (shutdown_requested);
+# the worker disposes. Provisioning is per sandbox (at create), not per run, so
+# follow-up runs start instantly against a warm tree.
+
+
+def provision_sandbox(conn: sqlite3.Connection, row: sqlite3.Row) -> None:
+    """Turn a `requested` sandbox into an `active` worktree, or mark it `failed`."""
+    sid = row["id"]
+    branch = row["branch"] or f"adw/{sid}"
+    path = worktree_path_for(sid)
+    sandboxes.set_status(conn, sid, sandboxes.PROVISIONING)
+    try:
+        ensure_dir(path.parent)
+        git_helper.worktree_add(REPO_ROOT, path, branch)
+        sandboxes.set_status(conn, sid, sandboxes.ACTIVE, worktree_path=str(path))
+        print(f"[worker] sandbox {sid} → active ({path}, branch {branch})")
+    except Exception as exc:  # any git failure: don't spawn runs into a half-made tree
+        sandboxes.set_status(conn, sid, sandboxes.FAILED, error=str(exc)[:500])
+        print(f"[worker] sandbox {sid} → failed to provision: {exc}")
+
+
+def teardown_sandbox(conn: sqlite3.Connection, row: sqlite3.Row) -> None:
+    """Remove a sandbox's worktree and mark it `gone`. The named branch and its
+    commits survive in the shared .git (that is the whole point of a worktree)."""
+    sid = row["id"]
+    sandboxes.set_status(conn, sid, sandboxes.SHUTTING_DOWN)
+    try:
+        if row["worktree_path"]:
+            git_helper.worktree_remove(REPO_ROOT, row["worktree_path"])
+        sandboxes.set_status(conn, sid, sandboxes.GONE)
+        print(f"[worker] sandbox {sid} → gone")
+    except Exception as exc:
+        # Best-effort: record why but still mark gone, so a stuck remove can't
+        # wedge the sandbox in shutting_down forever. `worktree prune` at the next
+        # startup cleans up git's record of a directory we couldn't delete.
+        sandboxes.set_status(conn, sid, sandboxes.GONE, error=str(exc)[:500])
+        print(f"[worker] sandbox {sid} → gone (teardown error: {exc})")
+
+
+def reconcile_sandboxes(conn: sqlite3.Connection, jobs: dict[int, Job]) -> None:
+    """One reconciliation pass: provision new sandboxes, tear down retired ones,
+    and fail runs orphaned by a dead sandbox. Called every poll."""
+    for row in sandboxes.with_status(conn, sandboxes.REQUESTED):
+        provision_sandbox(conn, row)
+    # Only tear down a sandbox with no run currently in flight — a live run keeps
+    # its tree until it finishes (it is reaped from `jobs` first, below).
+    busy = {j.sandbox_id for j in jobs.values() if j.sandbox_id}
+    for row in sandboxes.shutdown_pending(conn):
+        if row["id"] in busy:
+            continue
+        teardown_sandbox(conn, row)
+    for adw_id in queue.fail_orphaned(conn, sandboxes.dead_ids(conn)):
+        print(f"[worker] run {adw_id} → failed (its sandbox is gone/failed)")
 
 
 def drain(conn: sqlite3.Connection, config: str, concurrency: int, poll: float,
@@ -237,6 +327,15 @@ def drain(conn: sqlite3.Connection, config: str, concurrency: int, poll: float,
                 status = queue.FAILED
                 err = f"exit {rc}" if rc >= 0 else f"signal {-rc}"
             queue.mark_terminal(conn, qid, status, exit_code=rc, error=err)
+            # A sandbox run just committed (or not) into its worktree — record the
+            # tip so the cockpit shows exactly what the sandbox now holds. Best
+            # effort: a missing worktree (mid-teardown) simply leaves tip_sha as-is.
+            if job.sandbox_id and job.worktree_path:
+                try:
+                    sandboxes.set_tip_sha(conn, job.sandbox_id,
+                                          git_helper.head_sha(job.worktree_path))
+                except Exception:
+                    pass
             job.log.close()
             print(f"[worker] run {job.row['adw_id']} → {status} (exit {rc})")
             del jobs[qid]
@@ -253,13 +352,36 @@ def drain(conn: sqlite3.Connection, config: str, concurrency: int, poll: float,
                 signal_group(job.proc, signal.SIGKILL)
                 print(f"[worker] cancel {job.row['adw_id']} → SIGKILL (grace elapsed)")
 
+        # 2b. Reconcile sandboxes: provision requested, tear down retired, fail
+        #     runs orphaned by a dead sandbox. Before the fill so a run enqueued
+        #     alongside a fresh sandbox can claim it the moment it goes active.
+        reconcile_sandboxes(conn, jobs)
+
         # 3. Fill free slots with fresh work (unless shutting down).
         if not stopping:
+            # A run bound to a sandbox may only start when that sandbox is active
+            # AND not already hosting a run (runs in one sandbox serialize). Track
+            # `busy` across this fill loop so two queued rows for the same sandbox
+            # can't both launch in one poll — the second waits for the next.
+            active = sandboxes.active_ids(conn)
+            busy = {j.sandbox_id for j in jobs.values() if j.sandbox_id}
             while len(jobs) < concurrency:
-                row = queue.claim_next(conn)
+                row = queue.claim_next(conn, active - busy)
                 if row is None:
                     break
-                job = spawn(row, config, data_dir)
+                worktree_path = None
+                if row["sandbox_id"]:
+                    sb = sandboxes.get(conn, row["sandbox_id"])
+                    worktree_path = sb["worktree_path"] if sb else None
+                    if not worktree_path:
+                        # active_ids() said runnable, but the row lost its worktree
+                        # between reconcile and now — fail rather than run rootless.
+                        queue.mark_terminal(conn, row["id"], queue.FAILED,
+                                            error="sandbox has no active worktree")
+                        print(f"[worker] rejected queue #{row['id']}: "
+                              f"sandbox {row['sandbox_id']} not runnable")
+                        continue
+                job = spawn(row, config, data_dir, worktree_path)
                 if job is None:
                     queue.mark_terminal(conn, row["id"], queue.FAILED,
                                         error=f"unknown adw_name {row['adw_name']!r}")
@@ -268,7 +390,10 @@ def drain(conn: sqlite3.Connection, config: str, concurrency: int, poll: float,
                     continue
                 queue.mark_running(conn, row["id"], job.proc.pid)
                 jobs[job.queue_id] = job
-                print(f"[worker] run {row['adw_id']} ← {row['adw_name']} "
+                if job.sandbox_id:
+                    busy.add(job.sandbox_id)
+                where = f" in sandbox {job.sandbox_id}" if job.sandbox_id else ""
+                print(f"[worker] run {row['adw_id']} ← {row['adw_name']}{where} "
                       f"(pid {job.proc.pid})")
 
         # 4. Exit conditions.
@@ -435,6 +560,13 @@ def main() -> int:
     try:
         queue.ensure_schema(conn)
         workers.ensure_schema(conn)
+        sandboxes.ensure_schema(conn)
+        # Reap git's records of any worktrees a crashed predecessor left behind,
+        # so a stale <id> dir can't block a fresh `worktree add` on the same path.
+        try:
+            git_helper.worktree_prune(REPO_ROOT)
+        except Exception as exc:
+            print(f"[worker] worktree prune skipped: {exc}")
         # Sweep any row left by a crashed predecessor — one worker per project, so
         # a prior row for this host is stale — then heartbeat cleanly from here.
         workers.clear_host(conn, host)
