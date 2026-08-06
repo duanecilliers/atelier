@@ -67,27 +67,52 @@ def base_ctx(sandbox_id: str, branch: str, ports: dict[str, int]) -> dict[str, s
     return ctx
 
 
+def _hook_env(ctx: dict[str, str]) -> dict[str, str]:
+    """The env a provisioning hook (setup / services) runs under: operator_env()
+    (the engineer's own PATH/toolchains, venv stripped) plus the ctx values, so
+    `pnpm`/`docker`/etc. resolve exactly as in the operator's shell and a command
+    can also read `$SANDBOX_ID`/`$WEB` directly."""
+    env = operator_env()
+    env.update(ctx)
+    return env
+
+
+def _run_shell(command: str, cwd: str | Path, env: dict[str, str],
+               ctx: dict[str, str], log, kind: str) -> None:
+    """Interpolate `command`, run it (shell) in `cwd` streaming to `log`, and raise
+    on a non-zero exit. Shared by run_setup / run_services — `kind` (`setup` /
+    `services`) only shapes the error message; the log already carries the rendered
+    command and its output. `log` is the sandbox provision log (an open handle)."""
+    rendered = interpolate(command, ctx)
+    log.write(f"\n$ (cwd={cwd}) {rendered}\n")
+    log.flush()
+    result = subprocess.run(
+        rendered, shell=True, cwd=str(cwd), env=env,
+        stdout=log, stderr=subprocess.STDOUT,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"{kind} command failed (exit {result.returncode}): {rendered}")
+
+
 def run_setup(commands: list[str], cwd: str | Path, ctx: dict[str, str], log) -> None:
     """Run each `setup` command once, interpolated, in the worktree. Raises on the
     first non-zero exit so the worker marks the sandbox `failed` instead of hosting
-    runs against a half-provisioned tree.
-
-    Uses operator_env() (the engineer's own PATH/toolchains, venv stripped) plus the
-    ctx values as env, so `pnpm`/`docker`/etc. resolve exactly as in the operator's
-    shell and a command can also read `$SANDBOX_ID`/`$WEB` directly. `log` is the
-    sandbox provision log (an open file handle); command output streams into it."""
-    env = operator_env()
-    env.update(ctx)
+    runs against a half-provisioned tree."""
+    env = _hook_env(ctx)
     for command in commands:
-        rendered = interpolate(command, ctx)
-        log.write(f"\n$ (cwd={cwd}) {rendered}\n")
-        log.flush()
-        result = subprocess.run(
-            rendered, shell=True, cwd=str(cwd), env=env,
-            stdout=log, stderr=subprocess.STDOUT,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"setup command failed (exit {result.returncode}): {rendered}")
+        _run_shell(command, cwd, env, ctx, log, "setup")
+
+
+def run_services(command: str, cwd: str | Path, ctx: dict[str, str], log) -> None:
+    """Run a backing-services hook — the profile's `services.up` (at sandbox create,
+    after setup) or `services.down` (at shutdown, before the worktree is removed).
+    One interpolated shell string, sharing run_setup's env so a
+    `docker compose -p ${SANDBOX_ID} …` hook resolves the same tools and can read
+    `$SANDBOX_ID`/`$WEB` directly. Raises on a non-zero exit: the worker fails the
+    sandbox on an `up` failure and runs `down` best-effort, so a partial `up` can't
+    leak. The engine stays mechanism-agnostic — the hook wraps compose /
+    testcontainers / anything; there is no hard Docker dependency."""
+    _run_shell(command, cwd, _hook_env(ctx), ctx, log, "services")
 
 
 def run_env(profile: SandboxProfile, ports: dict[str, int],

@@ -72,7 +72,14 @@ sandbox:
       WEB: auto                       # a free port allocated per sandbox → $WEB, and injected env
     env:
       ATELIER_SANDBOX_WEB: ${WEB}     # every run in the sandbox sees its allocated port(s)
-    # services (up/down) land in slice 3; land (pr|merge|manual) in slice 4.
+    # Backing services (slice 3): `up` runs once at create (after setup); `down` at
+    # shutdown (before the worktree is removed). Shell strings — the engine is
+    # mechanism-agnostic, so a hook wraps compose / testcontainers / anything.
+    # Atelier itself needs none; a full-stack project declares e.g.:
+    #   services:
+    #     up:   docker compose -p ${SANDBOX_ID} up -d      # -p ${SANDBOX_ID} → targetable by `down`
+    #     down: docker compose -p ${SANDBOX_ID} down -v    #   even after a worker restart (orphan reaping)
+    # land (pr|merge|manual) lands in slice 4.
 
 agents:
   - name: planner
