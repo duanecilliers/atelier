@@ -212,6 +212,7 @@ what's mechanically checkable; plan/code **quality** is a reviewer's job, not a 
 | gate | checks |
 |---|---|
 | `artifacts_exist` | every path in `envelope.artifacts` exists on disk |
+| `artifacts_within_handoff` | every declared artifact resolves **inside** the session's `context_handoff/` dir. Wire it **only on read-only phases** (scout, reviewer, `writes: []`): a read-only agent's report belongs in the handoff dir, so an artifact elsewhere means it wrote into the repo — which `permissions.enforce` would roll back and hard-fail (§6). This turns that into a re-promptable correction that tells the agent to write under the handoff dir and remove the stray copy. An edit-capable agent legitimately writes artifacts into the repo, so it is **not** wired there |
 | `files_non_empty` | every existing artifact file has nonzero size (skips missing ones — existence is `artifacts_exist`'s job) |
 | `json_parses` | every `.json`-suffixed artifact that exists parses via `json.loads` |
 | `diff_matches_claims` | every path in `envelope.changed_files` exists (no-op on envelope types without that field, e.g. `PlanOutput`) |

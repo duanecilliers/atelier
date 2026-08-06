@@ -117,7 +117,9 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         with run.phase(PhaseParams(name=f"review_{i}", kind="agent", owner="reviewer",
                                    description="Confirm the build matches the plan")) as ph:
             review = ph.call(AgentCall(output_type=ReviewOutput, prompt=prompt, previous=build,
-                                       gates=[gates.artifacts_exist, gates.verdict_consistent]))
+                                       gates=[gates.artifacts_exist,
+                                              gates.artifacts_within_handoff,
+                                              gates.verdict_consistent]))
 
         if review.approved or i == MAX_REVISION_LOOPS:
             break

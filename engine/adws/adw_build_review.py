@@ -51,6 +51,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
             review = ph.call(AgentCall(output_type=ReviewOutput, prompt=prompt,
                                        previous=previous,
                                        gates=[gates.artifacts_exist,
+                                              gates.artifacts_within_handoff,
                                               gates.verdict_consistent]))
 
         if review.approved:
