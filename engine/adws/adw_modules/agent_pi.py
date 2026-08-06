@@ -106,8 +106,20 @@ def _context_tokens(usage: dict) -> int:
 
 
 def context_window(provider: str, model_id: str) -> int:
-    """The model's context ceiling from pi's merged model catalog."""
-    registry = json.loads(Path(MODELS_JSON).read_text())
+    """The model's context ceiling from pi's merged model catalog, or 0 (unknown)
+    when the catalog isn't available.
+
+    Context window is optional telemetry — the schema treats 0/NULL as "unknown" —
+    so a missing or malformed models.json must never fail an otherwise-successful
+    agent run. That is the common case in a STAMPED repo: it has neither pi's
+    ~/.pi/agent/models.json nor the PI_MODELS_PATH stub that engine/.env sets for
+    Atelier itself, yet still runs Claude agents through the SDK (agent_cc.py),
+    which calls this only to record the number. Fall through to _pi_catalog()
+    (itself already degrades to []), then 0."""
+    try:
+        registry = json.loads(Path(MODELS_JSON).read_text())
+    except (OSError, ValueError):
+        registry = {}
     for model in registry.get("providers", {}).get(provider, {}).get("models", []):
         if model.get("id") == model_id:
             return int(model.get("contextWindow") or 0)
