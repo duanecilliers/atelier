@@ -1,7 +1,7 @@
 # Atelier
 
 A workshop where **agents propose and deterministic code disposes**. It bolts the
-[Super-Simple Software Factory](https://github.com/)'s ADW engine onto an operator
+[Super-Simple Software Factory](https://github.com/disler/super-simple-software-factory)'s ADW engine onto an operator
 cockpit borrowed from [FounderOS](https://github.com/Bennettxai/FounderOS-DEMO)'s "Monolith Signal"
 design system. Agents work inside bounded phases, Python decides sequencing and
 acceptance, and every event streams to a UI you can watch.
@@ -206,5 +206,5 @@ Atelier is released under the [MIT License](LICENSE).
 
 It builds on two MIT-licensed projects, retained under their own MIT terms:
 
-- **Super-Simple Software Factory (SSSF)** — the ADW engine (`disler/sssf`)
+- **[Super-Simple Software Factory (SSSF)](https://github.com/disler/super-simple-software-factory)** — the ADW engine
 - **[FounderOS](https://github.com/Bennettxai/FounderOS-DEMO)** — the "Monolith Signal" cockpit design system

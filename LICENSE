@@ -26,5 +26,6 @@ SOFTWARE.
 Atelier builds on two MIT-licensed projects, whose copyright notices are
 retained under the terms of the MIT License:
 
-  - Super-Simple Software Factory (SSSF) — the ADW engine (disler/sssf)
+  - Super-Simple Software Factory (SSSF) — the ADW engine
+    (disler/super-simple-software-factory)
   - FounderOS — the "Monolith Signal" cockpit design (Bennettxai/FounderOS-DEMO)
