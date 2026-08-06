@@ -26,6 +26,17 @@ export const QUALITY_OPERATIONS = ['lint', 'typecheck', 'build'] as const;
 export type QualityOperation = (typeof QUALITY_OPERATIONS)[number];
 
 /**
+ * The sandbox isolation-level vocabulary (the ladder in docs/design/sandbox-runs.md).
+ * Bounded on purpose so the level stays a fixed seam enum: `local` is byte-identical
+ * to today (a run at REPO_ROOT); `worktree` is the L1 persistent-worktree sandbox
+ * shipped in slice 1; `worktree_env` (L2: deps + ports + services) lands in slices
+ * 2–3. *Provisioning* and *landing* are per-project config; the level NAME is the
+ * shared vocabulary. Keep in lockstep with engine/adws/adw_modules/sandboxes.py.
+ */
+export const SANDBOX_LEVELS = ['local', 'worktree', 'worktree_env'] as const;
+export type SandboxLevel = (typeof SANDBOX_LEVELS)[number];
+
+/**
  * The builtin pi tool vocabulary. These are the tools every roster names; the
  * claude_code backend maps them 1:1 via agent_cc.TOOL_MAP (read→Read, etc.).
  * Extension tools registered by a `harness_engineering` extension — e.g. the

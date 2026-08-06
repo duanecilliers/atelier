@@ -8,7 +8,7 @@
  * state the page was already rendered from). Pure — no DB access here.
  */
 
-import type { RunQueueRow, SessionSummary } from '@/lib/types';
+import type { RunQueueRow, Sandbox, SessionSummary } from '@/lib/types';
 
 /** 32-bit FNV-1a → short hex. Cheap and order-sensitive; plenty to diff on. */
 export function hash(s: string): string {
@@ -24,6 +24,16 @@ export function hash(s: string): string {
  *  rows, and the cancel_requested flip that shows "stopping…". */
 export function queueSig(rows: RunQueueRow[]): string {
   return hash(rows.map((r) => `${r.id}:${r.status ?? ''}:${r.cancel_requested ?? ''}`).join('|'));
+}
+
+/** Sandbox list: each sandbox's status + shutdown flag + tip — captures
+ *  provisioning, teardown, and a run committing a new tip into the tree. */
+export function sandboxesSig(rows: Sandbox[]): string {
+  return hash(
+    rows
+      .map((s) => `${s.id}:${s.status ?? ''}:${s.shutdown_requested ?? ''}:${s.tip_sha ?? ''}`)
+      .join('|'),
+  );
 }
 
 /** Runs list: each session's status + its phase-dot statuses, so a phase

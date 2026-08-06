@@ -206,6 +206,8 @@ export interface RunQueueRow {
   request: string | null;
   /** Roster config path; null = the worker's default. */
   config: string | null;
+  /** The sandbox this run is bound to (sandboxes.id); null = a local run at REPO_ROOT. */
+  sandbox_id: string | null;
   status: QueueStatus | null;
   requested_by: string | null;
   /** SQLite integer boolean — the cockpit sets this to ask the worker to stop. */
@@ -218,6 +220,53 @@ export interface RunQueueRow {
   claimed_at: string | null;
   started_at: string | null;
   ended_at: string | null;
+}
+
+/**
+ * sandboxes.status — a sandbox's lifecycle, set by the worker as it reconciles.
+ * `active` is the steady state that hosts runs; a run may target only an active
+ * sandbox. Mirrors the constants in engine/adws/adw_modules/sandboxes.py.
+ */
+export type SandboxStatus =
+  | 'requested'
+  | 'provisioning'
+  | 'active'
+  | 'landing'
+  | 'shutting_down'
+  | 'gone'
+  | 'failed';
+
+/** Terminal sandbox statuses — a sandbox here is finished and won't host runs. */
+export const TERMINAL_SANDBOX_STATUSES: readonly SandboxStatus[] = ['gone', 'failed'];
+
+/**
+ * sandboxes — the persistent-workspace control seam (design: docs/design/sandbox-runs.md).
+ * The cockpit INSERTs a `requested` row and flips `shutdown_requested`; the worker
+ * (adw_worker.py) provisions a git worktree, hosts runs in it, and disposes. The
+ * cockpit never spawns a process. Engine-owned columns (worktree_path, tip_sha,
+ * status) are written only by the worker. DDL source: engine/adws/adw_modules/sandboxes.py.
+ */
+export interface Sandbox {
+  /** Minted at request so the cockpit can deep-link before provisioning. */
+  id: string;
+  /** The repo this sandbox belongs to (display; the worker keys off its own REPO_ROOT). */
+  project_root: string | null;
+  /** local | worktree | worktree_env | … — the isolation level (bounded vocab). */
+  level: string | null;
+  /** Where the worktree lives on the worker host; null until the worker provisions it. */
+  worktree_path: string | null;
+  /** The named branch the worktree checks out. */
+  branch: string | null;
+  /** JSON name→port map (slice 2); null until then. */
+  ports: string | null;
+  status: SandboxStatus | null;
+  /** HEAD of the worktree, refreshed after each run — what the sandbox now holds. */
+  tip_sha: string | null;
+  /** SQLite integer boolean — the cockpit sets this to ask the worker to tear down. */
+  shutdown_requested: number | null;
+  /** Provisioning/teardown failure detail. */
+  error: string | null;
+  created_at: string | null;
 }
 
 /**

@@ -123,6 +123,7 @@ export const RunQueueRowSchema = z.object({
   agent: z.string().nullable(),
   request: z.string().nullable(),
   config: z.string().nullable(),
+  sandbox_id: z.string().nullable().optional(), // migration-added
   status: z.string().nullable(),
   requested_by: z.string().nullable(),
   cancel_requested: sqliteBool,
@@ -150,6 +151,28 @@ export const WorkerRowSchema = z.object({
 });
 
 /**
+ * sandboxes — the persistent-workspace control seam (design: docs/design/sandbox-runs.md).
+ * The cockpit WRITES it (INSERT a `requested` row; flip `shutdown_requested`); the
+ * worker (engine/adws/adw_worker.py) provisions/disposes and owns every engine
+ * column. DDL source: engine/adws/adw_modules/sandboxes.py. All columns ship in the
+ * CREATE (not migration-added), so a fresh `sandboxes` table is a hard requirement
+ * of check:contract.
+ */
+export const SandboxRowSchema = z.object({
+  id: z.string(),
+  project_root: z.string().nullable(),
+  level: z.string().nullable(),
+  worktree_path: z.string().nullable(),
+  branch: z.string().nullable(),
+  ports: z.string().nullable(),
+  status: z.string().nullable(),
+  tip_sha: z.string().nullable(),
+  shutdown_requested: sqliteBool,
+  error: z.string().nullable(),
+  created_at: z.string().nullable(),
+});
+
+/**
  * The column contract, table → column names, derived straight from the schemas
  * above so it can never disagree with them. scripts/check-contract.ts asserts
  * every one of these columns exists in the live sssf.db.
@@ -164,6 +187,7 @@ export const TABLE_COLUMNS = {
   agent_sessions: Object.keys(AgentSessionRowSchema.shape),
   run_queue: Object.keys(RunQueueRowSchema.shape),
   workers: Object.keys(WorkerRowSchema.shape),
+  sandboxes: Object.keys(SandboxRowSchema.shape),
 } as const satisfies Record<string, string[]>;
 
 export type TableName = keyof typeof TABLE_COLUMNS;

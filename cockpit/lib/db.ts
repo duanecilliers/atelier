@@ -24,6 +24,7 @@ import {
   PhaseRowSchema,
   ProcessRowSchema,
   RunQueueRowSchema,
+  SandboxRowSchema,
   SessionRowSchema,
   WorkerRowSchema,
 } from './schemas';
@@ -42,6 +43,7 @@ import type {
   PhaseCost,
   Process,
   RunQueueRow,
+  Sandbox,
   Session,
   SessionDetail,
   SessionSummary,
@@ -671,16 +673,38 @@ export class AtelierDb {
    */
   queue(limit = 100): RunQueueRow[] {
     if (!this.hasTable('run_queue')) return [];
+    // sandbox_id is migration-added; tolerate an older run_queue without it.
+    const sandboxId = this.optionalColumn('run_queue', 'sandbox_id');
     return z.array(RunQueueRowSchema).parse(
       this.db
         .prepare(
-          `SELECT id, adw_id, adw_name, agent, request, config, status, requested_by,
-                  cancel_requested, pid, exit_code, error,
+          `SELECT id, adw_id, adw_name, agent, request, config, ${sandboxId}, status,
+                  requested_by, cancel_requested, pid, exit_code, error,
                   enqueued_at, claimed_at, started_at, ended_at
              FROM run_queue ORDER BY id DESC LIMIT ?`,
         )
         .all(clamp(limit, 1, MAX_LIMIT)),
     ) as RunQueueRow[];
+  }
+
+  /**
+   * The sandboxes, most recent first — the persistent-workspace view. Empty (not
+   * an error) on a db the engine/worker/control has never touched, so the page
+   * renders before the first sandbox is ever requested. `activeOnly` filters to
+   * the sandboxes a run can attach to (the launcher's dropdown).
+   */
+  sandboxes(limit = 100, activeOnly = false): Sandbox[] {
+    if (!this.hasTable('sandboxes')) return [];
+    const where = activeOnly ? "WHERE status='active'" : '';
+    return z.array(SandboxRowSchema).parse(
+      this.db
+        .prepare(
+          `SELECT id, project_root, level, worktree_path, branch, ports, status,
+                  tip_sha, shutdown_requested, error, created_at
+             FROM sandboxes ${where} ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+        )
+        .all(clamp(limit, 1, MAX_LIMIT)),
+    ) as Sandbox[];
   }
 
   sessionCount(): number {
