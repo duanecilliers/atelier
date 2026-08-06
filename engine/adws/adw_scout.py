@@ -31,7 +31,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     with run.phase(PhaseParams(name="scout", kind="agent", owner="scout",
                                description="Find and report where things live — change nothing")) as ph:
         ph.call(AgentCall(output_type=ScoutOutput, prompt=prompt,
-                          gates=[gates.artifacts_exist]))
+                          gates=[gates.artifacts_exist, gates.artifacts_within_handoff]))
 
     return run.finish()
 

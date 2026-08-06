@@ -33,6 +33,45 @@ def artifacts_exist(envelope: EnvelopeBase, run) -> GateReport:
     return report
 
 
+def artifacts_within_handoff(envelope: EnvelopeBase, run) -> GateReport:
+    """A read-only agent's declared artifacts must live under `context_handoff/`.
+
+    Scout and the reviewer are `writes: []` — read-only with respect to the repo,
+    but always free to write their own report under the session's
+    `context_handoff/` (see `permissions.always_writable`). An artifact declared
+    anywhere else means the agent wrote into the repo instead; `permissions.enforce`
+    then rolls that back and hard-fails the run with no feedback to the agent.
+    Catching the mis-declared path HERE, as a claim gate, hands the agent a
+    targeted correction in the same session — telling it to write under the
+    handoff dir and remove the stray copy, so `enforce` (which still runs after)
+    sees a clean tree.
+
+    Wire this ONLY on read-only phases: an edit-capable agent (builder,
+    documenter) legitimately declares artifacts inside the repo.
+    """
+    report = GateReport()
+    root = Path(run.repo_root)
+
+    def _abs(x) -> Path:
+        # Anchor BOTH sides to repo_root: `context_handoff_dir` is often relative
+        # (data_dir is `engine/adws/adw_data` in the config), and artifacts are
+        # declared relative too — resolving them against cwd instead would only
+        # work by coincidence when cwd == repo_root. An already-absolute path
+        # (e.g. a stamped repo with an absolute data_dir) is left as-is.
+        p = Path(x)
+        return (p if p.is_absolute() else root / p).resolve()
+
+    handoff = _abs(run.context_handoff_dir)
+    for a in envelope.artifacts:
+        inside = _abs(a).is_relative_to(handoff)
+        report.check(a, inside,
+                     "under context_handoff/" if inside else
+                     f"a read-only agent must write its artifacts under the session "
+                     f"handoff dir ({handoff}) — write it there and remove any copy "
+                     f"elsewhere in the repo")
+    return report
+
+
 def files_non_empty(envelope: EnvelopeBase, run) -> GateReport:
     report = GateReport()
     for a in envelope.artifacts:

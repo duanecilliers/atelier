@@ -187,6 +187,14 @@ from `data_dir` rather than from `.gitignore`: the runtime is normally ignored,
 so it never even appears in a snapshot, but an agent's ability to record its own
 work must not depend on a gitignore line someone can delete.
 
+A read-only phase (scout, reviewer) also carries the `artifacts_within_handoff`
+gate: every artifact it declares must resolve **inside** `context_handoff/`. An
+artifact declared in the repo means the agent wrote there — which the write
+boundary rolls back and hard-fails — so the gate catches the mis-declared path
+first and re-prompts the agent to write under the handoff dir and remove the
+stray copy. It is wired only on read-only phases; an edit-capable agent writes
+artifacts into the repo by design.
+
 Narrow by role, not by reflex. Anything that must produce a `context_handoff/` artifact needs `write`, or it will resort to a `bash` heredoc. Withhold `edit`/`write` only where the restriction *is* the guarantee — a reviewer that cannot edit cannot quietly fix what it was asked to report.
 
 ### Extension tools must be named explicitly (pi only)
