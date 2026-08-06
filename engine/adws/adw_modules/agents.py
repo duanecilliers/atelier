@@ -38,7 +38,40 @@ def load_config(path: str = "adws/adw_sssf_config/sssf.config.yaml") -> SSSFConf
             if key in defaults:
                 agent.setdefault(key, defaults[key])
         agent.setdefault("harness_engineering", defaults.get("harness_engineering", []))
+        # pi no longer supports Anthropic, so an anthropic/* model can ONLY run
+        # through the Claude Agent SDK (claude_code, which uses the local `claude`
+        # CLI's own login — no key). Enforce it here, after the defaults merge so it
+        # also catches agents that inherit an anthropic model: no roster — not even
+        # a stale `coding_agent: pi` — can mis-route Anthropic to a backend that
+        # would fail at dispatch.
+        if str(agent.get("model", "")).startswith("anthropic/"):
+            agent["coding_agent"] = "claude_code"
     return SSSFConfig(**raw)
+
+
+# Project guidance injected into a claude_code agent's system prompt, so an agent
+# working in a STAMPED repo sees that project's own conventions. The Claude SDK
+# runs in isolation mode (agent_cc.py sets setting_sources: [] — no ambient
+# CLAUDE.md/skills), so this is the single, engine-controlled channel: it's
+# deterministic and leaks nothing but the one file we pick. AGENTS.md is the
+# canonical cross-tool file; CLAUDE.md is the fallback (it usually just @imports
+# AGENTS.md, so reading AGENTS.md directly beats injecting an unresolved import).
+# pi discovers these natively from cwd, so its agents need no injection.
+_GUIDANCE_FILES = ("AGENTS.md", "CLAUDE.md")
+
+
+def project_guidance(repo_root: str | Path) -> str | None:
+    """The repo-root guidance file's content under a header, or None when neither
+    AGENTS.md nor CLAUDE.md is present or readable (or it's empty)."""
+    for name in _GUIDANCE_FILES:
+        path = Path(repo_root) / name
+        if path.is_file():
+            try:
+                text = path.read_text().strip()
+            except OSError:
+                return None
+            return f"# Project guidance — {name}\n\n{text}" if text else None
+    return None
 
 
 def resolve(cfg: SSSFConfig, name: str) -> AgentConfig:
@@ -95,6 +128,14 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
     }
     system_text = prompts.render(agent.prompt_engineering.system, variables)
     user_text = prompts.render(agent.prompt_engineering.user, variables)
+    # claude_code runs in SDK isolation mode (no ambient CLAUDE.md), so hand it the
+    # stamped repo's guidance explicitly. pi already discovers AGENTS.md/CLAUDE.md
+    # from cwd, so its agents get it without injection. Appended (not prepended):
+    # the agent's own system.md leads, the project's conventions follow as context.
+    if agent.coding_agent == "claude_code":
+        guidance = project_guidance(run.repo_root)
+        if guidance:
+            system_text = f"{system_text}\n\n{guidance}"
     prompts.save(agent_dir / "prompts", "system.md", system_text)
     prompts.save(agent_dir / "prompts", "user.md", user_text)
 

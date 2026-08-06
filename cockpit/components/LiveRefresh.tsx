@@ -2,6 +2,8 @@
 
 import { useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import { useProjectId } from '@/lib/use-project';
+import { withProject } from '@/lib/project-url';
 
 /**
  * Live refresh for the two list views (Runs list `/`, Queue board `/queue`).
@@ -21,10 +23,11 @@ import { useRouter } from 'next/navigation';
  */
 export function LiveRefresh({ watch, initialSig }: { watch: 'runs' | 'queue'; initialSig: string }) {
   const router = useRouter();
+  const projectId = useProjectId();
   const lastSig = useRef(initialSig);
 
   useEffect(() => {
-    const es = new EventSource(`/api/dashboard/stream?watch=${watch}`);
+    const es = new EventSource(withProject(`/api/dashboard/stream?watch=${watch}`, projectId));
 
     es.onmessage = (ev) => {
       let frame: { sig?: string };
@@ -39,7 +42,7 @@ export function LiveRefresh({ watch, initialSig }: { watch: 'runs' | 'queue'; in
     };
 
     return () => es.close();
-  }, [watch, router]);
+  }, [watch, router, projectId]);
 
   return null;
 }

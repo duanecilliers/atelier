@@ -10,6 +10,12 @@ import {
   AgentCreateSchema,
   RosterInputError,
 } from '@/lib/roster';
+import { pathsForProject } from '@/lib/projects';
+
+/** The requested project's paths, from ?project=<id> (undefined → env fallback). */
+function projectPaths(req: NextRequest) {
+  return pathsForProject(req.nextUrl.searchParams.get('project') ?? undefined);
+}
 
 /**
  * The config seam's HTTP face. GET returns the current roster + advisory
@@ -36,9 +42,9 @@ function errorResponse(e: unknown, badRequestLabel: string): NextResponse {
   return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
 }
 
-export function GET() {
+export function GET(req: NextRequest) {
   try {
-    const roster = readRoster();
+    const roster = readRoster(projectPaths(req).configPath);
     return NextResponse.json({ roster, warnings: rosterWarnings(roster) });
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
@@ -54,7 +60,7 @@ export async function POST(req: NextRequest) {
   }
   try {
     const edit = RosterEditSchema.parse(body);
-    const roster = writeRoster(edit);
+    const roster = writeRoster(edit, projectPaths(req).configPath);
     return NextResponse.json({ roster, warnings: rosterWarnings(roster) });
   } catch (e) {
     return errorResponse(e, 'invalid roster edit');
@@ -71,7 +77,8 @@ export async function PUT(req: NextRequest) {
   }
   try {
     const spec = AgentCreateSchema.parse(body);
-    const roster = addAgent(spec);
+    const paths = projectPaths(req);
+    const roster = addAgent(spec, paths.configPath, paths.promptEngineeringDir, paths.promptEngineeringConfigPrefix);
     return NextResponse.json({ roster, warnings: rosterWarnings(roster) });
   } catch (e) {
     return errorResponse(e, 'invalid agent');
@@ -80,12 +87,12 @@ export async function PUT(req: NextRequest) {
 
 /** Remove an agent by name (?name=…). Leaves its prompt files on disk. */
 export function DELETE(req: NextRequest) {
-  const name = new URL(req.url).searchParams.get('name');
+  const name = req.nextUrl.searchParams.get('name');
   if (!name) {
     return NextResponse.json({ error: 'missing ?name=' }, { status: 400 });
   }
   try {
-    const roster = removeAgent(name);
+    const roster = removeAgent(name, projectPaths(req).configPath);
     return NextResponse.json({ roster, warnings: rosterWarnings(roster) });
   } catch (e) {
     return errorResponse(e, 'invalid agent name');

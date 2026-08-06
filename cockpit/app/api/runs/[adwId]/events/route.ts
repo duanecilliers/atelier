@@ -11,8 +11,9 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: NextRequest, { params }: { params: { adwId: string } }) {
   const after = Number(req.nextUrl.searchParams.get('after') ?? '0');
   const limit = Number(req.nextUrl.searchParams.get('limit') ?? '500');
+  const projectId = req.nextUrl.searchParams.get('project') ?? undefined;
   try {
-    const db = getDb();
+    const db = getDb(projectId);
     const page = db.events(params.adwId, Number.isFinite(after) ? after : 0, limit);
     // The run's status rides along so the client knows when to stop polling.
     const session = db.session(params.adwId);

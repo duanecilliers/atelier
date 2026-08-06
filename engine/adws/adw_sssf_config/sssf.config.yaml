@@ -41,6 +41,21 @@ observability:
   db: engine/adws/adw_data/sssf.db        # tracer writes here directly; the UI polls it
   poll_ms: 500                     # visualizer live-poll cadence
 
+# Deterministic quality commands, keyed by name — the block list adw_modules/
+# quality.py runs (map order is run order). These are DATA: the invocation is
+# the only per-repo thing about a check, so it lives here (config the operator
+# owns) instead of in the managed quality.py. Rules: argv is a LIST, never a
+# shell string; call binaries by BARE NAME (they inherit the operator's shell
+# env). Omit a block to skip it; an empty/absent quality: block runs nothing and
+# says so — no fake green.
+#
+# Atelier has no unit-test suite (so no `test` block — the test phase honestly
+# reports "nothing run"); its real gates are the cockpit's typecheck + seam
+# contract. Quality runs with cwd = repo root, so pnpm is pointed at cockpit/.
+quality:
+  typecheck: { argv: ["pnpm", "--dir", "cockpit", "typecheck"], area: frontend, operation: typecheck }
+  contract:  { argv: ["pnpm", "--dir", "cockpit", "check:contract"], area: frontend }
+
 agents:
   - name: planner
     coding_agent: claude_code          # plan D1: Claude planners run through the Agent SDK

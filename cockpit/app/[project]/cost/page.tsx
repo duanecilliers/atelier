@@ -11,16 +11,16 @@ export const dynamic = 'force-dynamic';
  * AtelierDb.costRollup). "Design for the 1000th run": measure where the money and
  * tokens go, therefore improve it. Read-only, like everything on the read path.
  */
-function load(): { data: CostRollup | null; error: string | null } {
+function load(projectId: string): { data: CostRollup | null; error: string | null } {
   try {
-    return { data: getDb().costRollup(), error: null };
+    return { data: getDb(projectId).costRollup(), error: null };
   } catch (e) {
     return { data: null, error: e instanceof Error ? e.message : String(e) };
   }
 }
 
-export default function CostPage() {
-  const { data, error } = load();
+export default function CostPage({ params }: { params: { project: string } }) {
+  const { data, error } = load(params.project);
 
   return (
     <div className="view">

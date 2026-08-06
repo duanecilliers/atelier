@@ -15,7 +15,7 @@
  */
 import Database from 'better-sqlite3';
 import { existsSync } from 'node:fs';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
 import {
   AgentSessionRowSchema,
@@ -25,6 +25,7 @@ import {
   ProcessRowSchema,
   RunQueueRowSchema,
   SessionRowSchema,
+  WorkerRowSchema,
 } from './schemas';
 import type {
   AgentSession,
@@ -45,17 +46,21 @@ import type {
   SessionDetail,
   SessionSummary,
   SessionUsage,
+  WorkerStatus,
 } from './types';
 
+// Only referenced by the constructor's not-found message; the actual path comes
+// from pathsForProject() (lib/projects.ts) via getDb().
 const DEFAULT_DB_RELATIVE = '../engine/adws/adw_data/sssf.db';
 const MAX_LIMIT = 1000;
 const DEFAULT_LIMIT = 500;
 
-/** Resolve the db path: SSSF_DB wins, else <cwd>/../engine/adws/adw_data/sssf.db. */
-export function resolveDbPath(): string {
-  const raw = process.env.SSSF_DB ?? DEFAULT_DB_RELATIVE;
-  return isAbsolute(raw) ? raw : resolve(process.cwd(), raw);
-}
+// A worker heartbeats every poll (adw_worker.py default: 1s). Treat it as
+// attached while a beat has landed within this window — ~10 missed beats, so a
+// page that loads between beats, or a little clock jitter, never flaps to
+// "no worker". A graceful worker exit deletes its row (instant detach); a crash
+// leaves the row to age out past this window.
+const WORKER_STALE_MS = 10_000;
 
 function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
@@ -681,5 +686,24 @@ export class AtelierDb {
   sessionCount(): number {
     const row = this.db.prepare('SELECT COUNT(*) AS n FROM sessions').get() as { n: number };
     return row?.n ?? 0;
+  }
+
+  /**
+   * Worker liveness for this project, from the freshest `workers` heartbeat.
+   * `attached` = a beat within WORKER_STALE_MS. Tolerates the table's absence on
+   * a db no worker has ever touched (a readonly connection can't create it) — the
+   * same grace queue() gives run_queue — reporting detached rather than throwing.
+   */
+  workerStatus(staleMs = WORKER_STALE_MS): WorkerStatus {
+    const detached: WorkerStatus = { attached: false, host: null, pid: null, last_seen_at: null };
+    if (!this.hasTable('workers')) return detached;
+    const row = this.db
+      .prepare('SELECT host, pid, started_at, last_seen_at FROM workers ORDER BY last_seen_at DESC LIMIT 1')
+      .get();
+    if (!row) return detached;
+    const w = WorkerRowSchema.parse(row);
+    const seen = w.last_seen_at ? Date.parse(w.last_seen_at) : NaN;
+    const attached = Number.isFinite(seen) && Date.now() - seen < staleMs;
+    return { attached, host: w.host, pid: w.pid, last_seen_at: w.last_seen_at };
   }
 }

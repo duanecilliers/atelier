@@ -220,6 +220,28 @@ export interface RunQueueRow {
   ended_at: string | null;
 }
 
+/**
+ * workers — the per-project liveness heartbeat. Each adw_worker upserts a row
+ * every poll into its OWN repo's sssf.db; the cockpit reads the freshest
+ * last_seen_at to say, honestly, whether a worker is attached to this project.
+ * Engine-owned (the worker writes; the cockpit only reads), like `processes`.
+ */
+export interface WorkerRow {
+  host: string | null;
+  pid: number | null;
+  started_at: string | null;
+  last_seen_at: string | null;
+}
+
+/** Derived worker liveness for one project — what the shell footer renders.
+ *  `attached` = a heartbeat landed within the freshness window. */
+export interface WorkerStatus {
+  attached: boolean;
+  host: string | null;
+  pid: number | null;
+  last_seen_at: string | null;
+}
+
 // ── payload_json shapes ──────────────────────────────────────────────────────
 // events.payload_json is stored as a string. These are the parsed shapes; every
 // field is optional because the tracer writes what the coding agent reported.

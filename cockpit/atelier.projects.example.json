@@ -1,0 +1,4 @@
+[
+  { "id": "atelier", "name": "Atelier", "root": "..", "adwsSubdir": "engine/adws", "workerDesired": true },
+  { "id": "my-app", "name": "My App", "root": "/absolute/path/to/a/stamped/repo", "adwsSubdir": "adws" }
+]

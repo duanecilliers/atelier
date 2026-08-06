@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useProjectId } from '@/lib/use-project';
+import { withProject } from '@/lib/project-url';
 
 /**
  * Archive a run out of the review list — the review seam's only UI.
@@ -22,6 +24,7 @@ export function ArchiveControl({
   redirectTo?: string;
 }) {
   const router = useRouter();
+  const projectId = useProjectId();
   const [busy, setBusy] = useState(false);
 
   async function archive(e: React.MouseEvent) {
@@ -31,7 +34,7 @@ export function ArchiveControl({
     if (busy) return;
     setBusy(true);
     try {
-      const res = await fetch(`/api/runs/${adwId}/archive`, {
+      const res = await fetch(withProject(`/api/runs/${adwId}/archive`, projectId), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ archived: true }),

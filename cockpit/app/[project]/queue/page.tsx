@@ -8,6 +8,8 @@ import { CancelButton } from '@/components/queue/CancelButton';
 import { ago } from '@/lib/format';
 import { queueSig } from '@/lib/dashboard-signature';
 import { readRecipes } from '@/lib/skills';
+import { pathsForProject } from '@/lib/projects';
+import { projectHref } from '@/lib/project-url';
 import type { AdwSpec } from '@/lib/adws';
 import { TERMINAL_QUEUE_STATUSES, type QueueStatus, type RunQueueRow } from '@/lib/types';
 
@@ -33,20 +35,20 @@ function isActive(s: QueueStatus | null): boolean {
   return s != null && ACTIVE.includes(s);
 }
 
-function loadQueue(): { queue: RunQueueRow[]; error: string | null } {
+function loadQueue(projectId: string): { queue: RunQueueRow[]; error: string | null } {
   try {
-    return { queue: getDb().queue(), error: null };
+    return { queue: getDb(projectId).queue(), error: null };
   } catch (e) {
     return { queue: [], error: e instanceof Error ? e.message : String(e) };
   }
 }
 
-/** The launcher menu, built live from the ADWs on disk (smallest chain first, as
- *  readRecipes() sorts them). Empty if the dir can't be read — the launcher then
- *  disables itself rather than crash the whole queue view. */
-function loadCatalog(): AdwSpec[] {
+/** The launcher menu, built live from THIS project's ADWs on disk (smallest chain
+ *  first, as readRecipes() sorts them). Empty if the dir can't be read — the
+ *  launcher then disables itself rather than crash the whole queue view. */
+function loadCatalog(projectId: string): AdwSpec[] {
   try {
-    return readRecipes().map((r) => ({
+    return readRecipes(pathsForProject(projectId).adwsDir).map((r) => ({
       name: r.id,
       label: r.name,
       blurb: r.tagline,
@@ -57,10 +59,10 @@ function loadCatalog(): AdwSpec[] {
   }
 }
 
-export default function QueuePage() {
+export default function QueuePage({ params }: { params: { project: string } }) {
   const now = Date.now();
-  const { queue, error } = loadQueue();
-  const catalog = loadCatalog();
+  const { queue, error } = loadQueue(params.project);
+  const catalog = loadCatalog(params.project);
 
   // Group into lanes once; keep enqueue order within a lane (queue() is id DESC,
   // i.e. newest first — which reads right for a "most recent on top" column).
@@ -111,7 +113,7 @@ export default function QueuePage() {
           ) : (
             <div className="flex gap-px overflow-x-auto border border-os-border bg-os-border">
               {LANES.map((lane) => (
-                <Lane key={lane} status={lane} rows={byLane[lane]} now={now} />
+                <Lane key={lane} status={lane} rows={byLane[lane]} now={now} projectId={params.project} />
               ))}
             </div>
           )}
@@ -121,7 +123,17 @@ export default function QueuePage() {
   );
 }
 
-function Lane({ status, rows, now }: { status: QueueStatus; rows: RunQueueRow[]; now: number }) {
+function Lane({
+  status,
+  rows,
+  now,
+  projectId,
+}: {
+  status: QueueStatus;
+  rows: RunQueueRow[];
+  now: number;
+  projectId: string;
+}) {
   return (
     <div className="flex min-w-[220px] flex-1 flex-col bg-os-bg">
       <div className="border-b border-os-hairline px-3 pt-3">
@@ -133,18 +145,18 @@ function Lane({ status, rows, now }: { status: QueueStatus; rows: RunQueueRow[];
         {rows.length === 0 ? (
           <p className="px-1 py-3 font-mono text-[10.5px] text-os-dim">—</p>
         ) : (
-          rows.map((row) => <QueueCard key={row.id} row={row} now={now} />)
+          rows.map((row) => <QueueCard key={row.id} row={row} now={now} projectId={projectId} />)
         )}
       </div>
     </div>
   );
 }
 
-function QueueCard({ row, now }: { row: RunQueueRow; now: number }) {
+function QueueCard({ row, now, projectId }: { row: RunQueueRow; now: number; projectId: string }) {
   const status = (row.status ?? 'queued') as QueueStatus;
   const tone = STATUS_TONE[status] ?? 'default';
   const canceling = row.cancel_requested === 1 && !TERMINAL_QUEUE_STATUSES.includes(status);
-  const runLink = row.adw_id ? `/runs/${row.adw_id}` : null;
+  const runLink = row.adw_id ? projectHref(projectId, `/runs/${row.adw_id}`) : null;
 
   return (
     <div className="flex flex-col gap-2 border border-os-border bg-os-surface p-3">

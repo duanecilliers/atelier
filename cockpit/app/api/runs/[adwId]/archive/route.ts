@@ -27,8 +27,9 @@ export async function POST(req: NextRequest, { params }: { params: { adwId: stri
     // No body (or malformed) → default to archiving.
   }
 
+  const projectId = req.nextUrl.searchParams.get('project') ?? undefined;
   try {
-    const changed = getReview().setArchived(adwId, archived);
+    const changed = getReview(projectId).setArchived(adwId, archived);
     if (!changed) return NextResponse.json({ error: `no session ${adwId}` }, { status: 404 });
     return NextResponse.json({ adw_id: adwId, archived });
   } catch (e) {

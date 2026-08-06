@@ -1,6 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ZodError } from 'zod';
-import { listSteps, buildAdw, AdwBuildError } from '@/lib/adw-builder';
+import { listSteps, buildAdw, AdwBuildError, type BuilderContext } from '@/lib/adw-builder';
+import { isRegistryMode, pathsForProject } from '@/lib/projects';
+
+/** The builder context for the requested project — but only when a registry is in
+ *  use. Single-project (env fallback) returns undefined so the builder keeps its
+ *  original behavior exactly (generator from ../engine/adws, atelier root cwd). */
+function builderContext(req: NextRequest): BuilderContext | undefined {
+  if (!isRegistryMode()) return undefined;
+  const paths = pathsForProject(req.nextUrl.searchParams.get('project') ?? undefined);
+  return { adwsDir: paths.adwsDir, root: paths.root };
+}
 
 /**
  * The ADW builder's HTTP face. GET returns the block catalog for the composer;
@@ -28,9 +38,9 @@ function errorResponse(e: unknown): NextResponse {
   return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    return NextResponse.json(await listSteps());
+    return NextResponse.json(await listSteps(builderContext(req)));
   } catch (e) {
     return errorResponse(e);
   }
@@ -44,7 +54,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'invalid JSON body' }, { status: 400 });
   }
   try {
-    return NextResponse.json(await buildAdw(body as never));
+    return NextResponse.json(await buildAdw(body as never, builderContext(req)));
   } catch (e) {
     return errorResponse(e);
   }

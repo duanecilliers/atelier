@@ -14,6 +14,18 @@ export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhig
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
 /**
+ * The quality-check trace classifiers — QualityArea / QualityOperation in
+ * data_types.py. A `quality:` block entry may set `area`/`operation` to bucket
+ * the check in the cost/quality views; both default to the common case in the
+ * engine, so they are optional in the config.
+ */
+export const QUALITY_AREAS = ['frontend', 'backend'] as const;
+export type QualityArea = (typeof QUALITY_AREAS)[number];
+
+export const QUALITY_OPERATIONS = ['lint', 'typecheck', 'build'] as const;
+export type QualityOperation = (typeof QUALITY_OPERATIONS)[number];
+
+/**
  * The builtin pi tool vocabulary. These are the tools every roster names; the
  * claude_code backend maps them 1:1 via agent_cc.TOOL_MAP (read→Read, etc.).
  * Extension tools registered by a `harness_engineering` extension — e.g. the

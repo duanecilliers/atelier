@@ -4,6 +4,8 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Badge, Label } from '@/components/terminal';
 import { compact, ago } from '@/lib/format';
+import { useProjectId } from '@/lib/use-project';
+import { withProject } from '@/lib/project-url';
 import {
   BUILTIN_TOOLS,
   CODING_AGENTS,
@@ -465,14 +467,16 @@ function AgentCard({
 // ── Shared save hook ──────────────────────────────────────────────────────────
 
 function useSaver() {
+  const projectId = useProjectId();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // All roster writes scope to the current project — every url gets ?project=.
   async function request(url: string, init: RequestInit): Promise<boolean> {
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(url, init);
+      const res = await fetch(withProject(url, projectId), init);
       const data = (await res.json()) as { error?: string };
       if (!res.ok) throw new Error(data.error ?? `request failed (${res.status})`);
       return true;

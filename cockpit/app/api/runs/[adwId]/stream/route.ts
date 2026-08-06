@@ -22,12 +22,13 @@ export async function GET(req: NextRequest, { params }: { params: { adwId: strin
   const lastId = req.headers.get('last-event-id');
   const afterParam = Number(lastId ?? req.nextUrl.searchParams.get('after') ?? '0');
   let cursor = Number.isFinite(afterParam) ? Math.max(0, afterParam) : 0;
+  const projectId = req.nextUrl.searchParams.get('project') ?? undefined;
 
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      const db = getDb();
+      const db = getDb(projectId);
       let closed = false;
       let lastStatus: string | null | undefined; // undefined = not yet sent
       let tick: ReturnType<typeof setInterval> | undefined;

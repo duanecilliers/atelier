@@ -36,6 +36,20 @@ const ENGINE_ADWS_DIR = resolve(process.cwd(), '../engine/adws');
 /** A generator run exited non-zero — carries its stderr for a 400 to the client. */
 export class AdwBuildError extends Error {}
 
+/**
+ * Multi-project override (Part E). When the cockpit fronts several stamped repos,
+ * the builder must run THAT project's make_adw.py, from THAT project's root, and
+ * write into THAT project's adws/. Absent (single-project env fallback) the
+ * builder keeps its original behavior exactly: generator from the sibling
+ * ../engine/adws, cwd the atelier root, writes honoring make_adw's own env.
+ */
+export interface BuilderContext {
+  /** Where make_adw.py lives and where the script is written. */
+  adwsDir: string;
+  /** The project repo root — cwd for `uv run` so it resolves adw_modules. */
+  root: string;
+}
+
 /** Mirrors make_adw.py::NAME_RE for a fast, clear client error; make_adw is the
  *  authority (it also rejects reserved names, bad order, unmet requirements). */
 const NAME_RE = /^[a-z][a-z0-9_]*$/;
@@ -60,21 +74,25 @@ export interface StepCatalog {
   blocks: BlockSpec[];
 }
 
-function makeAdwPath(): string {
-  return join(ENGINE_ADWS_DIR, 'make_adw.py');
-}
-
-/** The engine repo root — where the ADWs run, so `uv run` resolves adw_modules. */
-function repoRoot(): string {
-  return resolve(ENGINE_ADWS_DIR, '..', '..');
+/** The generator script location + cwd for a run: the project's adws/ + root when
+ *  a BuilderContext is given (multi-project), else the sibling ../engine/adws +
+ *  atelier root (single-project env fallback, unchanged). */
+function resolveDirs(ctx?: BuilderContext): { makeAdwPath: string; cwd: string } {
+  const adwsDir = ctx?.adwsDir ?? ENGINE_ADWS_DIR;
+  const cwd = ctx?.root ?? resolve(ENGINE_ADWS_DIR, '..', '..');
+  return { makeAdwPath: join(adwsDir, 'make_adw.py'), cwd };
 }
 
 /** `uv run make_adw.py <args>`, resolving stdout or throwing AdwBuildError with
- *  the generator's own message. A non-zero exit puts stderr on `err.stderr`. */
-async function runGenerator(args: string[]): Promise<string> {
+ *  the generator's own message. A non-zero exit puts stderr on `err.stderr`.
+ *  With a ctx, SSSF_ADWS_DIR is set so make_adw writes into that project's adws/. */
+async function runGenerator(args: string[], ctx?: BuilderContext): Promise<string> {
+  const { makeAdwPath, cwd } = resolveDirs(ctx);
+  const env = ctx ? { ...process.env, SSSF_ADWS_DIR: ctx.adwsDir } : process.env;
   try {
-    const { stdout } = await execFileAsync('uv', ['run', makeAdwPath(), ...args], {
-      cwd: repoRoot(),
+    const { stdout } = await execFileAsync('uv', ['run', makeAdwPath, ...args], {
+      cwd,
+      env,
       timeout: 30_000,
       maxBuffer: 4 * 1024 * 1024,
     });
@@ -90,24 +108,25 @@ async function runGenerator(args: string[]): Promise<string> {
 }
 
 /** The block catalog make_adw.py exposes — the builder palette. */
-export async function listSteps(): Promise<StepCatalog> {
-  const out = await runGenerator(['--list-steps', '--json']);
+export async function listSteps(ctx?: BuilderContext): Promise<StepCatalog> {
+  const out = await runGenerator(['--list-steps', '--json'], ctx);
   return JSON.parse(out) as StepCatalog;
 }
 
 /** Generate a script. `preview` returns the source without writing; otherwise the
- *  file is written to engine/adws/ and its path is returned. */
+ *  file is written to the (project's) adws/ and its path is returned. */
 export async function buildAdw(
   spec: AdwCreateSpec,
+  ctx?: BuilderContext,
 ): Promise<{ preview: true; source: string } | { preview: false; path: string; name: string }> {
   const { name, steps, preview } = AdwCreateSchema.parse(spec);
   const base = ['--name', name, '--steps', steps.join(',')];
 
   if (preview) {
-    const source = await runGenerator([...base, '--stdout']);
+    const source = await runGenerator([...base, '--stdout'], ctx);
     return { preview: true, source };
   }
-  const out = await runGenerator([...base, '--json']);
+  const out = await runGenerator([...base, '--json'], ctx);
   const { path } = JSON.parse(out) as { path: string; name: string };
   return { preview: false, path, name: `adw_${name}` };
 }

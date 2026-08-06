@@ -10,3 +10,8 @@ cockpit/next-env.d.ts
 # (adws/adw_data/sessions/, sssf.db*, .env, __pycache__) is ignored by
 # engine/.gitignore, which git honors relative to that folder.
 specs/
+
+# Supervisor (adw_worker.py --supervise) writes a per-project worker log into
+# each project root's .atelier/. Runtime noise — ignore it, but keep
+# .atelier/manifest.json (the stamp record the updater reads) tracked.
+.atelier/worker.log

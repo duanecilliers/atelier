@@ -26,13 +26,14 @@ type Watch = 'runs' | 'queue';
 
 /** The structural signature of the requested slice, read fresh from sqlite.
  *  Read errors bubble to the caller (pump), which swallows and retries. */
-function signature(watch: Watch): string {
-  const db = getDb();
+function signature(watch: Watch, projectId: string | undefined): string {
+  const db = getDb(projectId);
   return watch === 'queue' ? queueSig(db.queue()) : runsSig(db.sessions());
 }
 
 export async function GET(req: NextRequest) {
   const watch: Watch = req.nextUrl.searchParams.get('watch') === 'queue' ? 'queue' : 'runs';
+  const projectId = req.nextUrl.searchParams.get('project') ?? undefined;
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream<Uint8Array>({
@@ -67,7 +68,7 @@ export async function GET(req: NextRequest) {
       const pump = () => {
         if (closed) return;
         try {
-          const sig = signature(watch);
+          const sig = signature(watch, projectId);
           // First tick always emits (seeds the client); after that only on change.
           if (sig !== lastSig) {
             lastSig = sig;
