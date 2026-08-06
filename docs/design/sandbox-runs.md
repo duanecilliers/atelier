@@ -60,6 +60,31 @@ while its *tree, deps, ports, services, and env* are isolated per sandbox.
   travel, so runs couldn't authenticate or be verified by kicking a real ADW. Reopens only for a
   project on **API-key** auth. See the machine gotcha in [Architecture](../01-architecture.md).
 
+### Evaluated: treehouse for worktree orchestration (spike 2026-08-06)
+
+[treehouse](https://github.com/kunchenguid/treehouse) (Go, MIT) manages a pool of reusable,
+pre-warmed worktrees with durable leases. Spiked v2.0.0 against this repo's cockpit. Findings:
+
+- **What fits.** Durable lease (`get --lease --lease-holder <id>`) maps cleanly onto a persistent
+  sandbox: an outside-repo worktree held with no process, in a small tidy state file. A commit on a
+  named branch **survives `return`/destroy** because the worktree shares the **main repo's `.git`**
+  (`git-common-dir` → the real `.git`) — validating our named-branch merge-back.
+- **The catch.** That branch survival and the correct `show-toplevel` in an outside-repo worktree are
+  **inherent to `git worktree`**, not treehouse's value-add. treehouse's actual value-add is *pool +
+  warm reuse across churn*, and it's **smaller than advertised** for us: measured `pnpm install` was
+  1.7s cold vs 0.24s warm — pnpm's global content-addressed store already makes cold cheap. The pool
+  edge is real only for **build caches** (`.next`, native builds) **across sandbox teardown/recreate**
+  — but our **persistent sandbox already keeps caches warm within its life**, so the benefit only
+  lands under high create/destroy churn.
+- **Costs.** A new external binary on every worker host (incl. stamped repos); a second source of
+  truth (its `state.json` vs our `sandboxes` table); and young automation flags (`--json`,
+  `return --if-lease-id` are newer than the v2.0.0 in use — even latest is v2.1.1).
+
+**Decision (leaning, pending confirm): worktree provider is an internal abstraction.** Slice 1 ships
+a native `git worktree` provider (zero deps, fully verifiable); treehouse is an **opt-in** provider
+(`sandbox.provider: git | treehouse`) for setups with real sandbox churn. Nothing else in the design
+changes — the provider only supplies `acquire(sandbox_id) → path` / `release` / `list`.
+
 ## The key architectural insight (the one correctness fix)
 
 If a run's `cwd` becomes a worktree, the codebase splits cleanly into two concerns — and only one
