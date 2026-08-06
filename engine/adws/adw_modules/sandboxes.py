@@ -122,6 +122,12 @@ def set_status(conn: sqlite3.Connection, sandbox_id: str, status: str, *,
     conn.execute(f"UPDATE sandboxes SET {', '.join(sets)} WHERE id=?", params)
 
 
+def set_ports(conn: sqlite3.Connection, sandbox_id: str, ports_json: str) -> None:
+    """Record the allocated ports (JSON name->port) chosen at provision time, so
+    every run in the sandbox reads the same block the services bound to."""
+    conn.execute("UPDATE sandboxes SET ports=? WHERE id=?", (ports_json, sandbox_id))
+
+
 def set_tip_sha(conn: sqlite3.Connection, sandbox_id: str, tip_sha: str) -> None:
     """Record the worktree's HEAD — refreshed after each run so the cockpit can
     show (and, in slice 4, land) exactly what the sandbox holds."""
