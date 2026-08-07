@@ -115,6 +115,30 @@ def run_services(command: str, cwd: str | Path, ctx: dict[str, str], log) -> Non
     _run_shell(command, cwd, _hook_env(ctx), ctx, log, "services")
 
 
+def run_land(command: str, cwd: str | Path, ctx: dict[str, str], log) -> str:
+    """Run the project's `land` hook (slice 4) — one interpolated shell string in
+    the worktree, sharing the setup/services env so `gh`/`git`/etc. resolve as in
+    the operator's shell and `$BRANCH`/`$SANDBOX_ID` are readable directly. Unlike
+    setup/services, its stdout is CAPTURED and returned (a `gh pr create` prints the
+    PR URL) so the cockpit can surface where the work landed, while still being
+    mirrored to the provision log. Raises on a non-zero exit — the worker records
+    the failure and leaves the sandbox `active` for a retry (landing never destroys
+    a sandbox)."""
+    rendered = interpolate(command, ctx)
+    log.write(f"\n$ (cwd={cwd}) {rendered}\n")
+    log.flush()
+    result = subprocess.run(
+        rendered, shell=True, cwd=str(cwd), env=_hook_env(ctx),
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    out = result.stdout or ""
+    log.write(out)
+    log.flush()
+    if result.returncode != 0:
+        raise RuntimeError(f"land command failed (exit {result.returncode}): {rendered}")
+    return out.strip()
+
+
 def run_env(profile: SandboxProfile, ports: dict[str, int],
             sandbox_id: str, branch: str) -> dict[str, str]:
     """The extra process env every run in this sandbox inherits: one var per

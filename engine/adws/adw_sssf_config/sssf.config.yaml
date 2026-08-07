@@ -79,7 +79,13 @@ sandbox:
     #   services:
     #     up:   docker compose -p ${SANDBOX_ID} up -d      # -p ${SANDBOX_ID} → targetable by `down`
     #     down: docker compose -p ${SANDBOX_ID} down -v    #   even after a worker restart (orphan reaping)
-    # land (pr|merge|manual) lands in slice 4.
+    # Landing (slice 4): the cockpit's "Land" action asks the worker to run this hook
+    # ONCE, in the worktree; the sandbox stays active until separately shut down.
+    # mode: manual (the default) runs nothing — the branch is left for a human. The
+    # hook's stdout (a PR URL) is captured and surfaced. A full-stack project declares:
+    #   land:
+    #     mode: pr                                       # pr | merge | manual
+    #     cmd:  gh pr create --fill --head ${BRANCH}     # ${BRANCH}/${SANDBOX_ID}/ports interpolate
 
 agents:
   - name: planner

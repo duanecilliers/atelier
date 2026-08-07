@@ -338,6 +338,41 @@ def teardown_sandbox(conn: sqlite3.Connection, row: sqlite3.Row,
         print(f"[worker] sandbox {sid} → gone (teardown error: {exc})")
 
 
+def land_sandbox(conn: sqlite3.Connection, row: sqlite3.Row,
+                 profile: SandboxProfile | None) -> None:
+    """Run a sandbox's `land` hook once, then return it to `active` — landing NEVER
+    destroys the sandbox (that's shutdown's job). Claims the request by flipping to
+    `landing` and clearing the flag (so a mid-land crash is reaped back to active,
+    not re-run, and a retry needs a fresh request). `mode: manual` (or no profile /
+    no cmd) records that the branch was left for a human and runs nothing. The hook's
+    captured output (a PR URL / merge summary) is stored for the cockpit to surface;
+    a failure leaves the sandbox `active` with the error recorded, re-requestable."""
+    sid = row["id"]
+    land = profile.land if profile is not None else None
+    sandboxes.claim_land(conn, sid)
+    try:
+        if land is None or land.mode == "manual":
+            result = f"manual — branch {row['branch']} left for a human"
+        elif not land.cmd:
+            # A pr/merge mode with no cmd is a misconfiguration — record it plainly
+            # rather than reporting a clean "manual" land the operator never asked for.
+            result = f"{land.mode}: no land command configured — branch {row['branch']} left as-is"
+        else:
+            # The land hook logs beside the worktree, like setup/services.
+            log = open(provision_log_path(sid), "a", buffering=1)
+            try:
+                out = provision.run_land(land.cmd, row["worktree_path"], _row_ctx(row), log)
+            finally:
+                log.close()
+            result = f"{land.mode}: {out}" if out else land.mode
+        sandboxes.finish_land(conn, sid, land_result=result[:1000])
+        print(f"[worker] sandbox {sid} landed ({result[:120]})")
+    except Exception as exc:
+        # The tree is untouched — return to active so the operator can re-request.
+        sandboxes.finish_land(conn, sid, error=str(exc)[:500])
+        print(f"[worker] sandbox {sid} → land failed (still active): {exc}")
+
+
 def reap_orphan_sandboxes(conn: sqlite3.Connection, sandbox_cfg: SandboxConfig) -> None:
     """Recover sandboxes a crashed worker left mid-lifecycle, at startup. One worker
     owns its project's sandboxes exclusively (supervisor guarantees one per project;
@@ -346,7 +381,10 @@ def reap_orphan_sandboxes(conn: sqlite3.Connection, sandbox_cfg: SandboxConfig) 
     and no live run can be using it. Bring its services down (best-effort, targetable
     via `-p ${SANDBOX_ID}` even though the old worker is gone), remove any leftover
     worktree, and resolve the status: one caught mid-provision becomes `failed`, one
-    caught mid-teardown becomes `gone`."""
+    caught mid-teardown becomes `gone`. A sandbox caught mid-`landing` is different:
+    landing is non-destructive (it never touches the worktree or services), so it is
+    simply returned to `active` — nothing to reap, the land just didn't finish and is
+    re-requestable."""
     orphans = (sandboxes.with_status(conn, sandboxes.PROVISIONING)
                + sandboxes.with_status(conn, sandboxes.SHUTTING_DOWN))
     for row in orphans:
@@ -367,6 +405,12 @@ def reap_orphan_sandboxes(conn: sqlite3.Connection, sandbox_cfg: SandboxConfig) 
                   else "worker restart during provisioning")
         sandboxes.set_status(conn, sid, terminal, error=detail)
         print(f"[worker] reaped orphan sandbox {sid} ({was} → {terminal})")
+    # A land in flight when the worker died: the tree is intact, so just resurface it
+    # as active with a note (land_requested was cleared at claim, so it won't re-run).
+    for row in sandboxes.with_status(conn, sandboxes.LANDING):
+        sid = row["id"]
+        sandboxes.finish_land(conn, sid, error="worker restart during landing")
+        print(f"[worker] reaped orphan sandbox {sid} (landing → active)")
 
 
 def reconcile_sandboxes(conn: sqlite3.Connection, jobs: dict[int, Job],
@@ -375,13 +419,21 @@ def reconcile_sandboxes(conn: sqlite3.Connection, jobs: dict[int, Job],
     and fail runs orphaned by a dead sandbox. Called every poll."""
     for row in sandboxes.with_status(conn, sandboxes.REQUESTED):
         provision_sandbox(conn, row, sandbox_cfg.profile_for(row["level"]))
-    # Only tear down a sandbox with no run currently in flight — a live run keeps
-    # its tree until it finishes (it is reaped from `jobs` first, below).
+    # Only tear down / land a sandbox with no run currently in flight — a live run
+    # keeps its tree busy (a land hook and a run must not race on the same tree); it
+    # is reaped from `jobs` first, below, so a retire/land waits at most one poll.
     busy = {j.sandbox_id for j in jobs.values() if j.sandbox_id}
     for row in sandboxes.shutdown_pending(conn):
         if row["id"] in busy:
             continue
         teardown_sandbox(conn, row, sandbox_cfg.profile_for(row["level"]))
+    # Land AFTER teardown: a sandbox flagged for both shuts down (the stronger intent)
+    # rather than landing a tree that's about to vanish — shutdown_pending flips it out
+    # of `active`, so land_pending (active-only) then skips it.
+    for row in sandboxes.land_pending(conn):
+        if row["id"] in busy:
+            continue
+        land_sandbox(conn, row, sandbox_cfg.profile_for(row["level"]))
     for adw_id in queue.fail_orphaned(conn, sandboxes.dead_ids(conn)):
         print(f"[worker] run {adw_id} → failed (its sandbox is gone/failed)")
 

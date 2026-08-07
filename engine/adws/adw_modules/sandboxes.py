@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS sandboxes (
   status             TEXT DEFAULT 'requested', -- requested -> provisioning -> active -> shutting_down -> gone | failed
   tip_sha            TEXT,                -- HEAD of the worktree, refreshed after each run
   shutdown_requested INTEGER DEFAULT 0,   -- cooperative teardown flag the worker polls
+  land_requested     INTEGER DEFAULT 0,   -- cooperative land flag the worker polls (slice 4)
+  land_result        TEXT,                -- captured land-hook output (PR URL / merge summary) for display
   error              TEXT,                -- provisioning/teardown failure detail
   created_at         TEXT
 );
@@ -50,7 +52,7 @@ CREATE TABLE IF NOT EXISTS sandboxes (
 REQUESTED = "requested"
 PROVISIONING = "provisioning"
 ACTIVE = "active"
-LANDING = "landing"            # slice 4
+LANDING = "landing"            # slice 4 — transient in-flight window; returns to active
 SHUTTING_DOWN = "shutting_down"
 GONE = "gone"
 FAILED = "failed"
@@ -59,12 +61,21 @@ FAILED = "failed"
 DEAD = frozenset({GONE, FAILED})
 
 _COLS = ("id, project_root, level, worktree_path, branch, ports, status,"
-         " tip_sha, shutdown_requested, error, created_at")
+         " tip_sha, shutdown_requested, land_requested, land_result, error, created_at")
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
-    """Create the sandboxes table if absent. Safe on every worker startup."""
+    """Create the sandboxes table if absent, and self-heal the additive land_*
+    columns (slice 4). The base table predates them, so CREATE IF NOT EXISTS won't
+    add them to an existing db — an explicit ALTER does, the same additive-migration
+    discipline queue.py and the tracer use. Done here so the worker (which polls
+    land_requested and writes land_result) is correct even on an older db."""
     conn.executescript(SANDBOXES_DDL)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(sandboxes)")}
+    if "land_requested" not in columns:
+        conn.execute("ALTER TABLE sandboxes ADD COLUMN land_requested INTEGER DEFAULT 0")
+    if "land_result" not in columns:
+        conn.execute("ALTER TABLE sandboxes ADD COLUMN land_result TEXT")
 
 
 def with_status(conn: sqlite3.Connection, status: str) -> list[sqlite3.Row]:
@@ -81,6 +92,17 @@ def shutdown_pending(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         f"SELECT {_COLS} FROM sandboxes WHERE shutdown_requested=1 AND status NOT IN (?, ?)"
         " ORDER BY created_at, rowid",
         (GONE, SHUTTING_DOWN),
+    ).fetchall()
+
+
+def land_pending(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Active sandboxes asked to land (slice 4). Only an `active` sandbox can land —
+    a run may only target an active tree, and the worktree must exist for the hook —
+    so a land flag set on any other status is inert until (if ever) it goes active."""
+    return conn.execute(
+        f"SELECT {_COLS} FROM sandboxes WHERE land_requested=1 AND status=?"
+        " ORDER BY created_at, rowid",
+        (ACTIVE,),
     ).fetchall()
 
 
@@ -132,3 +154,31 @@ def set_tip_sha(conn: sqlite3.Connection, sandbox_id: str, tip_sha: str) -> None
     """Record the worktree's HEAD — refreshed after each run so the cockpit can
     show (and, in slice 4, land) exactly what the sandbox holds."""
     conn.execute("UPDATE sandboxes SET tip_sha=? WHERE id=?", (tip_sha, sandbox_id))
+
+
+def claim_land(conn: sqlite3.Connection, sandbox_id: str) -> None:
+    """Claim a land request (slice 4): flip `active` -> `landing` and clear the
+    flag in one write. Clearing at claim time means a retry needs a fresh request,
+    and a worker that dies mid-land is reaped back to `active` (not re-run) — the
+    same claim-then-clear discipline as provisioning a `requested` sandbox."""
+    conn.execute(
+        "UPDATE sandboxes SET status=?, land_requested=0 WHERE id=?",
+        (LANDING, sandbox_id),
+    )
+
+
+def finish_land(conn: sqlite3.Connection, sandbox_id: str, *,
+                land_result: str | None = None, error: str | None = None) -> None:
+    """Return a sandbox to `active` after a land attempt — landing NEVER destroys a
+    sandbox. `error` is always written (so a clean land clears a prior failure);
+    `land_result` only when given, so a later failed re-land can't wipe the PR URL
+    a prior success recorded."""
+    sets = ["status=?"]
+    params: list[object] = [ACTIVE]
+    if land_result is not None:
+        sets.append("land_result=?")
+        params.append(land_result)
+    sets.append("error=?")
+    params.append(error)
+    params.append(sandbox_id)
+    conn.execute(f"UPDATE sandboxes SET {', '.join(sets)} WHERE id=?", params)

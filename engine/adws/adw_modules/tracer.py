@@ -102,7 +102,11 @@ MIGRATIONS = [("agent_sessions", "color", "TEXT"),
               ("sessions", "archived", "INTEGER DEFAULT 0"),
               # run_queue predates sandboxes; bind a queued run to a sandbox
               # (NULL = today's local run) on an existing db via ALTER.
-              ("run_queue", "sandbox_id", "TEXT")]
+              ("run_queue", "sandbox_id", "TEXT"),
+              # sandboxes predates its slice-4 land seam; add the control flag +
+              # captured-result columns to an existing sandboxes table via ALTER.
+              ("sandboxes", "land_requested", "INTEGER DEFAULT 0"),
+              ("sandboxes", "land_result", "TEXT")]
 
 
 class Tracer:
