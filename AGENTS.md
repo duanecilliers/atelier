@@ -161,8 +161,16 @@ MANAGED for exactly this reason. Other agent harnesses (codex/cursor/pi) don't s
 
 ## Pull requests
 
+- Use the **`gh` CLI** for all GitHub operations — open (`gh pr create`), inspect
+  (`gh pr view`), and merge (`gh pr merge`) PRs, rather than the web UI or raw git pushes to a
+  protected branch.
 - Do **not** include the `🤖 Generated with [Claude Code](https://claude.com/claude-code)`
   line (or similar generated-by footers) in PR descriptions.
+- **This repo is squash-only.** Merge commits and rebase merges are **disabled** on GitHub, so
+  `gh pr merge --merge` / `--rebase` fail — always `gh pr merge --squash --delete-branch`. The
+  branch's per-commit history collapses into **one** commit on `main`, so the **PR title + body
+  become that commit's message** — write them as the durable record (the individual branch
+  commits do not survive on `main`). Confirm before merging; it is outward-facing.
 
 ## Commit guidelines
 
@@ -180,6 +188,9 @@ When asked to commit, propose a commit strategy:
 Conventional commit types: `feat`, `fix`, `refactor`, `test`, `docs`, `style`, `chore`, `perf`, `ci`, `build`
 
 Do NOT include any `Co-Authored-By` footer.
+
+Atomic per-commit history serves **review on the PR** — it is squashed away on merge (see Pull
+requests above), so `main` keeps only the squash commit built from the PR title + body.
 
 ## Git & path layout (easy to get wrong)
 
