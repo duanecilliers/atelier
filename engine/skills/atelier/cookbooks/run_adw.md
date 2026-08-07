@@ -28,6 +28,8 @@ uv run adws/<recon-chain>.py "where is auth handled" --config path/to/other.conf
 
 The prompt is inline text or a file path. Launch in the background so you can poll while it works; the `adw_id` is printed on startup — capture it, everything else keys off it.
 
+To run inside an **isolated worktree** instead of the repo root, enqueue the run bound to a sandbox (`sandbox_id`) — the worker spawns it with `cwd=<worktree>` and the trace still lands in the shared db. See [sandboxes.md](sandboxes.md).
+
 ### Listen for the roster
 
 The chain says *what runs*; the config says *who runs it*. **If the engineer references a roster, a config, or a model tier, pass it — do not fall through to the default.**

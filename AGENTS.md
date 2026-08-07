@@ -106,9 +106,11 @@ overriding whatever the roster says — pi only ever runs non-Anthropic models (
   boundary. The live tail uses **rowid-cursor polling** (`/api/runs/[id]/events` +
   `components/run/LiveTail.tsx`); force-dynamic server components re-query sqlite on refresh.
 - **Write path is deliberately tiny.** Two surfaces, both outside the trace:
-  - *Control plane (Phase 2).* `lib/control.ts` (`AtelierControl`) is a *separate* read-write
-    sqlite connection that touches **only** the `run_queue` table — it enqueues a launch spec and
-    flips `cancel_requested`, nothing else.
+  - *Control plane (Phase 2, + sandboxes Phase 5).* `lib/control.ts` (`AtelierControl`) is a
+    *separate* read-write sqlite connection that touches **only** the two control tables,
+    `run_queue` and `sandboxes` — it enqueues a launch spec + flips `cancel_requested`, and creates
+    a sandbox + flips its `land_requested` / `shutdown_requested`. Every write is an INSERT or a
+    flag flip; the worker disposes.
   - *Roster config (Phase 4).* `lib/roster.ts` reads and writes the **file**
     `sssf.config.yaml` (not the db) via `/api/roster`. Edits are **surgical**: it splices only the
     changed value's byte-range in the parsed `yaml` Document (missing keys are inserted as one
@@ -128,6 +130,15 @@ running ADW — and it builds the exact CLI argv a human would type, so a UI-lau
 byte-for-byte identical to a CLI one (same trace, same acceptance). Cancel = SIGTERM the
 process group; the ADW's own signal handler (`session.py::_finalize_when_killed`) closes its
 trace. Keep this invariant when extending either side.
+
+**Sandboxes (Phase 5) obey the same spine.** A sandbox is an isolated, persistent git worktree
+(on a named branch) that hosts one or more runs; the cockpit only INSERTs a `sandboxes` row or
+flips a flag (`land_requested` / `shutdown_requested`), and the **worker** provisions the worktree,
+runs the project's `land` hook, and disposes — it never spawns from the cockpit. A sandboxed run is
+still spawned through the one `spawn()`, byte-identical argv, with `cwd=<worktree>` and
+`SSSF_TRACE_ROOT=REPO_ROOT` so its trace still lands in the shared `sssf.db`. Config lives in the
+`sandbox:` block (`SSSFConfig.sandbox`, mirrored in `roster.ts`); details in
+[`docs/07-operations.md`](docs/07-operations.md) §5 and [`docs/05-config-and-roster.md`](docs/05-config-and-roster.md) §8.
 
 ### The operator skill (`engine/skills/atelier/`) — stamped, MANAGED
 

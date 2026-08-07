@@ -92,6 +92,7 @@ work yourself:**
 | extend adw_modules with new low-level logic | [cookbooks/update_modules.md](cookbooks/update_modules.md) |
 | run / monitor an ADW | [cookbooks/how_to_prompt_for_the_eng.md](cookbooks/how_to_prompt_for_the_eng.md) **first**, then [cookbooks/run_adw.md](cookbooks/run_adw.md) |
 | turn a request into an ADW prompt | [cookbooks/how_to_prompt_for_the_eng.md](cookbooks/how_to_prompt_for_the_eng.md) |
+| create / land / shut down an isolated sandbox workspace, or run an ADW in one | [cookbooks/sandboxes.md](cookbooks/sandboxes.md) |
 
 Deep specs, when needed: [references/config.md](references/config.md) ·
 [references/handoff.md](references/handoff.md) ·

@@ -227,7 +227,79 @@ SSSF_DB=/Users/duane/Dev/atelier/engine/adws/adw_data/sssf.db
 | `cockpit/.env.example` | Does not exist | — |
 | `engine/.env.example` | Does not exist (only `.env.sample`) | — |
 
-## 5. Self-build guardrails & git/path layout
+## 5. Sandboxes — isolated persistent workspaces
+
+A **sandbox** lets an ADW run in an isolated, **persistent** git worktree on a named branch —
+its own tree, and at L2 its own deps, ports, backing services, and env — instead of sharing the
+repo root. It is a first-class entity that **outlives the runs it hosts** (real feature work is
+iterative), and it is torn down **only on explicit shutdown**. The config that declares
+provisioning and landing lives in the `sandbox:` block — see
+[05-config-and-roster.md §8](05-config-and-roster.md#8-the-sandbox-block--isolated-workspaces).
+
+The control plane extends cleanly: the cockpit only ever INSERTs a `sandboxes` row or flips a flag
+on one; the **same `just worker`** that drains `run_queue` reconciles sandboxes — it is still the
+only thing that touches a real worktree. Parallelism is **across** sandboxes; runs targeting the
+*same* sandbox **serialize** (two runs in one tree re-introduce the write collision the isolation
+removes).
+
+### The lifecycle and how you drive it
+
+```
+ request ─▶ provisioning ─▶ active ⇄ (run, run, run…) ⇄ landing ─▶ shutting_down ─▶ gone
+            worktree add     host serialized runs        land hook    services.down       └ or → failed
+```
+
+| Action | Cockpit surface | What it writes | What the worker does |
+|---|---|---|---|
+| **Create** | `/[project]/sandboxes` → **+ New sandbox** (`POST /api/sandboxes`) | INSERT a `requested` row | `git worktree add` on a named branch; at L2 also allocate ports, run `setup`, `services.up` → `active` (or `failed`) |
+| **Attach a run** | an `active` card → **run here →** → Conductor, enqueue with `sandbox_id` | `run_queue.sandbox_id` set | spawn with `cwd=<worktree>` + `SSSF_TRACE_ROOT=REPO_ROOT`; serialize per sandbox |
+| **Land** | **Land** (`POST /api/sandboxes/[id]/land`) | flip `land_requested` | run the project's `land` hook once, capture stdout to `land_result`, return to `active` — **never destroys** |
+| **Shut down** | **Shutdown** (`POST /api/sandboxes/[id]/shutdown`) | flip `shutdown_requested` | `services.down`, remove the worktree, mark `gone` — the **only** teardown |
+
+A run may target a sandbox **only while `active`**; enqueuing against a gone/failed sandbox is
+rejected, and a run orphaned by a sandbox that dies mid-wait is failed rather than left queued.
+Landing's named branch and its commits **survive in the shared `.git`** — shutdown reclaims the
+working tree, not the work.
+
+### The one correctness fix — `SSSF_TRACE_ROOT`
+
+A sandboxed run's `cwd` is the worktree, so its **execution** surface (agent cwd, write-boundary
+diff, commit, `protected_files`) isolates correctly for free — `repo_root()` returns the worktree.
+Its **observability** sink would otherwise follow `cwd` too and write the trace *into* the
+worktree, where the cockpit can't see it. So the worker sets `SSSF_TRACE_ROOT=REPO_ROOT` and the
+engine absolutizes the db/JSONL/session paths against it — the trace still lands in the shared
+`sssf.db`. A non-sandboxed run leaves the signal unset → everything resolves against `cwd` as
+before → **byte-identical**. Worktrees live **outside the repo** at
+`~/.atelier/worktrees/<project>/<sandbox-id>`; the provision/services/land hooks log **beside**
+the tree at `<sandbox-id>.provision.log`, never inside it.
+
+### Reconcile + reap (extends the `drain()` loop in §3)
+
+Every poll, `reconcile_sandboxes` runs alongside the run reconciliation: provision each `requested`
+sandbox; tear down each `shutdown_requested` one **with no run in flight**; **then** land each
+`land_requested` `active` one with no run in flight (land after teardown, so a sandbox flagged for
+both shuts down — the stronger intent); and fail any queued run whose sandbox is now gone/failed.
+
+On **startup**, `reap_orphan_sandboxes` recovers sandboxes a crashed predecessor left mid-lifecycle
+(one worker owns its project's sandboxes exclusively, so a transient-state row is a dead worker's):
+`provisioning` → `failed`, `shutting_down` → `gone` (services down + tree removed), and a `landing`
+orphan → back to `active` (landing never touched the tree — nothing to reap, and it's
+re-requestable). Under `--supervise` this composes for free: each per-project worker sits at its
+own `REPO_ROOT`, so `SSSF_TRACE_ROOT` is that project's root and its sandboxes reconcile into its
+own `sssf.db` — there is no second ADW spawn site.
+
+### Observing sandboxes
+
+```
+sqlite3 engine/adws/adw_data/sssf.db \
+  "select id, level, status, branch, tip_sha, land_result, error from sandboxes order by created_at desc;"
+sqlite3 engine/adws/adw_data/sssf.db \
+  "select adw_id, adw_name, status, sandbox_id from run_queue where sandbox_id is not null order by id desc;"
+```
+
+`tip_sha` NULL = the sandbox has hosted no run yet; `land_result` holds the last land hook's output.
+
+## 6. Self-build guardrails & git/path layout
 
 Atelier has one git root — `engine/` is not a nested repo. `repo_root()` resolves to the atelier
 root regardless of where an ADW script physically lives, which is what lets the factory build
@@ -256,7 +328,7 @@ drive `openai-codex/*` models here — routing an `anthropic/*` model through `c
 fails. That's why `claude_code`-backed agents (via `claude-agent-sdk`) exist as the second
 backend, using the local `claude` CLI's own login instead of an API key.
 
-## 6. What's ephemeral vs. tracked
+## 7. What's ephemeral vs. tracked
 
 Gitignored (never commit):
 - `engine/adws/adw_data/sessions/` — per-run session directories.
@@ -275,7 +347,7 @@ Tracked source worth knowing about:
 
 **Never commit `sssf.db`.**
 
-## 7. Testing writes in isolation
+## 8. Testing writes in isolation
 
 To exercise config or ADW-authoring writes without touching your live tree: copy the `adw_*.py`
 scripts you're testing into a temp directory, then run the cockpit against that copy with env

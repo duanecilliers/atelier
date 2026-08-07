@@ -1,11 +1,15 @@
 # Design note — Sandbox / isolated runs
 
-> **Status: DESIGN DECIDED — not yet implemented.** This is the last open Phase 5 item
-> ("Sandbox / cloud runs", see [`atelier-plan.html`](../atelier-plan.html)). The design below is
-> settled (see [§ Decisions](#chosen-shape--decisions-locked)); nothing is built yet — no
-> `SSSF_TRACE_ROOT`, no `sandboxes` table, no `run_queue.sandbox_id`, no sandbox config, no worktree
-> wiring. Work happens on the `feat/sandbox-runs` branch. When it lands, fold the relevant parts into
-> the numbered guides and drop the status note in [`docs/README.md`](../README.md).
+> **Status: IMPLEMENTED (Phase 5), on `feat/sandbox-runs`.** The design below shipped across four
+> slices — L1 lifecycle, L2 provisioning (ports/setup/env), L3 backing services, L4 landing
+> workflows. `SSSF_TRACE_ROOT`, the `sandboxes` table, `run_queue.sandbox_id`, the `sandbox:` config
+> block, and the worktree wiring all exist. This note is retained as the **design rationale**; the
+> operating reference now lives in the numbered guides — [`07-operations.md`](../07-operations.md#5-sandboxes--isolated-persistent-workspaces)
+> (worker reconcile/reap), [`05-config-and-roster.md`](../05-config-and-roster.md#8-the-sandbox-block--isolated-workspaces)
+> (the `sandbox:` block), and [`08-extending-the-system.md`](../08-extending-the-system.md#the-sandbox-feature-is-the-worked-example)
+> (Recipe E as the worked seam change). One follow-on remains deferred: the **new-vs-attach
+> launcher** (a level picker + reading `sandbox.default` / templating `profile.branch`) — see
+> [§ Open questions](#open-questions-settled-during-build), reconciled below.
 >
 > **History.** (1) Originally scoped to L1 ephemeral parallel-write isolation for the "80% junk work."
 > (2) Revisited 2026-08-06: the real need is **L2 (env + services) isolation for actual feature
@@ -212,21 +216,39 @@ land hook (branch left for manual merge).
    (`pr` / `merge` / `manual`); cockpit "Land" action showing the resulting PR/merge. Sandbox stays
    until separately shut down.
 
-## Open questions to settle during build
+## Open questions (settled during build)
 
-- **Worktree location** — **outside the repo** (`~/.atelier/worktrees/<project-id>/<sandbox-id>`),
-  confirmed: no project `.gitignore` change, `show-toplevel` still resolves inside it. *(settled)*
-- **New vs attach** — does a launch default to a fresh sandbox, or attach to an existing active one?
-  Propose: explicit — "new sandbox" vs pick an existing one in the launcher.
-- **Shutdown safety** — warn / block shutdown when the sandbox has un-landed commits (`tip_sha`
-  ahead of base and no land recorded)? Propose: warn, allow force.
-- **Serialization** — reject a second run into a busy sandbox, or queue it behind the first? Propose:
-  queue (natural for follow-up work).
-- **Port allocation** — probe a free port at provision time (simple, mildly TOCTOU-racy) vs a
-  reserved range per worker. Probe first.
-- **Service-failure handling** — if `services.up` fails, mark the sandbox `failed` and don't spawn
-  runs; ensure `services.down` still runs on shutdown.
-- **Stale reaping cadence** — worker startup only, or also periodic?
+Every question below was resolved during implementation; the one genuine remainder is the
+new-vs-attach launcher, deferred to a future slice.
+
+- **Worktree location** — **SETTLED: outside the repo** (`~/.atelier/worktrees/<project>/<sandbox-id>`).
+  No project `.gitignore` change, `show-toplevel` still resolves inside it.
+- **Serialization** — **SETTLED: queue behind the first.** A run bound to a busy sandbox is simply
+  not claimed this poll (`queue.claim_next(active − busy)`) and waits in the queue — no reject, no
+  second tree. Parallelism is across sandboxes.
+- **Port allocation** — **SETTLED: probe a free port at provision time**, persisted as JSON on the
+  row and re-read into each run's env (mildly TOCTOU-racy, accepted for simplicity).
+- **Service-failure handling** — **SETTLED.** A failing `services.up` marks the sandbox `failed`,
+  spawns no runs, and brings any partially-started services back down (targetable via
+  `-p ${SANDBOX_ID}`) before removing the tree; `services.down` always runs on shutdown, first,
+  best-effort (a wedged service can't leak the worktree).
+- **Stale reaping cadence** — **SETTLED: worker startup.** One worker owns its project's sandboxes
+  exclusively, so any transient-state row at startup is a dead predecessor's; `provisioning`→`failed`,
+  `shutting_down`→`gone`, `landing`→`active` (non-destructive). No periodic sweep needed.
+- **Service-failure / landing precedence** *(surfaced during build)* — **SETTLED: shutdown wins.** A
+  sandbox flagged for both land and shutdown shuts down (the stronger intent); land runs *after*
+  teardown in the reconcile pass, and `shutdown_pending` flips it out of `active` so `land_pending`
+  (active-only) skips it.
+- **Shutdown safety (un-landed commits)** — **RESOLVED by design, not a guard.** Shutdown removes
+  the working *tree* but the named branch and its commits survive in the shared `.git`, so there is
+  no data-loss cliff to warn about; landing is a separate, non-destructive action. A "you have
+  un-landed commits" advisory could still be added to the shutdown button later, but nothing is lost
+  without it.
+- **New vs attach** — **DEFERRED (the one remaining follow-on).** The launcher is still "create
+  requests an L1 `worktree`; attach a run by picking an active sandbox's *run here →*". A real
+  new-vs-attach launcher — a level picker, reading `sandbox.default`, and templating
+  `profile.branch` — is future work; `sandbox.default` and `profile.branch` are defined and
+  validated but not yet consulted by the create path.
 
 ## Verification plan
 
