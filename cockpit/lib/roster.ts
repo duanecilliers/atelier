@@ -222,6 +222,20 @@ export function sandboxBranchTemplate(cfg: SandboxConfig, level: string): string
   return DEFAULT_SANDBOX_BRANCH_TEMPLATE;
 }
 
+/** The branch template for `level` from a project's config file — what createSandbox
+ *  interpolates ${SANDBOX_ID} into. Config is authority on the branch (never the
+ *  client), so the /api/sandboxes create route reads it here. A missing/unreadable
+ *  config is not fatal to creating an L1 sandbox — fall back to the engine default.
+ *  (The create-and-run path in /api/queue needs no template — its purpose always
+ *  defers naming to the worker.) */
+export function projectSandboxBranchTemplate(configPath: string, level: string): string {
+  try {
+    return sandboxBranchTemplate(readRoster(configPath).sandbox, level);
+  } catch {
+    return DEFAULT_SANDBOX_BRANCH_TEMPLATE;
+  }
+}
+
 // ── The editable surface ──────────────────────────────────────────────────────
 // Scalars (round 1): model, coding_agent, thinking, color, purpose per agent;
 // model, coding_agent, thinking on defaults. Arrays (this round): the security

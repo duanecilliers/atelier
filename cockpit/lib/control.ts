@@ -106,15 +106,34 @@ export type CreateSandboxSpec = z.infer<typeof CreateSandboxSpecSchema>;
  *  dynamic allowlist — so a cockpit-built ADW is launchable at once) is checked
  *  in enqueue() against THIS project's adws/ dir, not here, since the schema has
  *  no project context; the worker re-checks it before it spawns anything. */
-export const EnqueueSpecSchema = z.object({
-  adw_name: z.string().trim().min(1).max(64),
-  request: z.string().trim().min(1, 'request is required').max(20_000),
-  agent: z.string().trim().min(1).max(64).nullable().optional(),
-  config: z.string().trim().min(1).max(512).nullable().optional(),
-  /** Bind this run to a sandbox (sandboxes.id); omitted/null = a local run at REPO_ROOT. */
-  sandbox_id: z.string().trim().min(1).max(64).nullable().optional(),
-  requested_by: z.string().trim().min(1).max(120).nullable().optional(),
-});
+export const EnqueueSpecSchema = z
+  .object({
+    adw_name: z.string().trim().min(1).max(64),
+    request: z.string().trim().min(1, 'request is required').max(20_000),
+    agent: z.string().trim().min(1).max(64).nullable().optional(),
+    config: z.string().trim().min(1).max(512).nullable().optional(),
+    /** Bind this run to an EXISTING sandbox (sandboxes.id); omitted/null = a local
+     *  run at REPO_ROOT. Mutually exclusive with `new_sandbox`. */
+    sandbox_id: z.string().trim().min(1).max(64).nullable().optional(),
+    /** Create a FRESH sandbox and run inside it (the "＋ New sandbox" launcher path).
+     *  When set, the run's `request` doubles as the sandbox purpose, so the worker
+     *  names the branch from it — no separate typing. Mutually exclusive with an
+     *  explicit `sandbox_id`. */
+    new_sandbox: z
+      .object({ level: z.enum(CREATABLE_LEVELS as [string, ...string[]]).default('worktree') })
+      .nullable()
+      .optional(),
+    requested_by: z.string().trim().min(1).max(120).nullable().optional(),
+  })
+  .superRefine((s, ctx) => {
+    if (s.new_sandbox && s.sandbox_id) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'cannot both attach to a sandbox and create a new one',
+        path: ['new_sandbox'],
+      });
+    }
+  });
 export type EnqueueSpec = z.infer<typeof EnqueueSpecSchema>;
 
 function nowIso(): string {
@@ -215,6 +234,41 @@ export class AtelierControl {
         nowIso(),
       );
     return { id: Number(info.lastInsertRowid), adw_id: adwId };
+  }
+
+  /** Create a FRESH sandbox and enqueue a run bound to it — the "＋ New sandbox"
+   *  launcher path — as ONE transaction, so a rejected enqueue never leaves an
+   *  orphan sandbox. The run's `request` doubles as the sandbox `purpose` (capped
+   *  to the purpose column's 500 chars), so the worker names the branch from the
+   *  same text (branch_namer, `adw/<id>` fallback) — the operator types nothing
+   *  extra. Same determinism spine: two INSERTs, the worker disposes.
+   *
+   *  No branch template is read here: a non-empty purpose (the request is required)
+   *  always defers naming to the worker (branch NULL), so a config-derived template
+   *  would never be interpolated — createSandbox's own default suffices. */
+  enqueueInNewSandbox(spec: EnqueueSpec): { id: number; adw_id: string; sandbox_id: string } {
+    const parsed = EnqueueSpecSchema.parse(spec);
+    if (!parsed.new_sandbox) {
+      throw new EnqueueError('enqueueInNewSandbox requires new_sandbox');
+    }
+    // Validate the ADW up front so we don't open a transaction we'll only roll back.
+    if (!readAdwNames(this.adwsDir).has(parsed.adw_name)) {
+      throw new EnqueueError(`unknown adw_name '${parsed.adw_name}' for this project`);
+    }
+    const level = parsed.new_sandbox.level;
+    const run = this.db.transaction(() => {
+      const { id: sandbox_id } = this.createSandbox({ level, purpose: parsed.request.slice(0, 500) });
+      const { id, adw_id } = this.enqueue({
+        adw_name: parsed.adw_name,
+        request: parsed.request,
+        agent: parsed.agent ?? null,
+        config: parsed.config ?? null,
+        sandbox_id,
+        requested_by: parsed.requested_by ?? null,
+      });
+      return { id, adw_id, sandbox_id };
+    });
+    return run();
   }
 
   // ── sandboxes ──────────────────────────────────────────────────────────────

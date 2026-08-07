@@ -71,6 +71,13 @@ intent — no page ever spawns a process.
   the shared `sssf.db`** (that env var is the one correctness fix — observability paths absolutize
   against the trace root, execution paths follow `cwd`). A run enqueued against a gone/failed
   sandbox is rejected at enqueue; one whose sandbox dies mid-wait is failed as orphaned.
+- **Create-and-run in one step** — the Conductor's **Sandbox** dropdown also offers **＋ new
+  sandbox** (beside *local* and the attach list). Picking it shows the level toggle and, on Launch,
+  **creates a sandbox and enqueues the run into it** in one transaction (`AtelierControl`
+  ::`enqueueInNewSandbox`) — no orphan sandbox if the enqueue is rejected. The run's `request`
+  doubles as the sandbox `purpose`, so the **branch is named from the same text** you typed (the
+  namer above) with nothing extra to fill in. Mutually exclusive with picking an existing
+  `sandbox_id`.
 - **Land** — **Land** flips `land_requested`. The worker runs the project's `land` hook **once**,
   in the worktree, then returns the sandbox to `active`. The hook's captured stdout (a PR URL /
   merge summary) shows on the card as `land`. `mode: manual` (or no `land` configured) runs

@@ -10,6 +10,7 @@ import { queueSig } from '@/lib/dashboard-signature';
 import { readRecipes } from '@/lib/skills';
 import { pathsForProject } from '@/lib/projects';
 import { projectHref } from '@/lib/project-url';
+import { readRoster, sandboxLaunchOptions, type SandboxLaunchOptions } from '@/lib/roster';
 import type { AdwSpec } from '@/lib/adws';
 import { TERMINAL_QUEUE_STATUSES, type QueueStatus, type RunQueueRow } from '@/lib/types';
 
@@ -59,8 +60,8 @@ function loadCatalog(projectId: string): AdwSpec[] {
   }
 }
 
-/** The project's ACTIVE sandboxes — the ones a run can attach to. Empty (and the
- *  launcher hides its picker) on any read error or a db with none. */
+/** The project's ACTIVE sandboxes — the ones a run can attach to. Empty on any
+ *  read error or a db with none (the launcher still offers local + ＋ new sandbox). */
 function loadSandboxes(projectId: string): SandboxOption[] {
   try {
     return getDb(projectId)
@@ -71,11 +72,23 @@ function loadSandboxes(projectId: string): SandboxOption[] {
   }
 }
 
+/** The levels the "＋ New sandbox" launcher option may create + which to preselect,
+ *  from this project's `sandbox:` config. Falls back to the always-available L1
+ *  worktree when config is absent/unreadable, mirroring the Sandboxes page. */
+function loadLaunchOptions(projectId: string): SandboxLaunchOptions {
+  try {
+    return sandboxLaunchOptions(readRoster(pathsForProject(projectId).configPath).sandbox);
+  } catch {
+    return { levels: [{ level: 'worktree', branchTemplate: 'adw/${SANDBOX_ID}' }], defaultLevel: 'worktree' };
+  }
+}
+
 export default function QueuePage({ params }: { params: { project: string } }) {
   const now = Date.now();
   const { queue, error } = loadQueue(params.project);
   const catalog = loadCatalog(params.project);
   const sandboxes = loadSandboxes(params.project);
+  const launch = loadLaunchOptions(params.project);
 
   // Group into lanes once; keep enqueue order within a lane (queue() is id DESC,
   // i.e. newest first — which reads right for a "most recent on top" column).
@@ -118,7 +131,12 @@ export default function QueuePage({ params }: { params: { project: string } }) {
       ) : (
         <>
           <div className="mb-6">
-            <QueueLauncher catalog={catalog} sandboxes={sandboxes} />
+            <QueueLauncher
+              catalog={catalog}
+              sandboxes={sandboxes}
+              sandboxLevels={launch.levels}
+              defaultSandboxLevel={launch.defaultLevel}
+            />
           </div>
 
           {queue.length === 0 ? (

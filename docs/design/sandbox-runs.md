@@ -282,6 +282,17 @@ level picker + `sandbox.default` + branch templating — has since landed (see *
   sandbox's *run here →* binds a run via `sandbox_id`. Contained to the cockpit create path
   (`NewSandboxButton`, the sandboxes page, `/api/sandboxes`, `lib/roster.ts`, `createSandbox`) — no
   engine change, since the worker already reads `sandboxes.branch`.
+- **Create-and-run in one action (the Conductor)** — **SETTLED: launch into a fresh sandbox without a
+  round-trip.** The Queue launcher's Sandbox dropdown gains a **"＋ new sandbox"** choice beside
+  *local* and the attach list; picking it reveals the same level toggle as the create form and, on
+  Launch, creates a sandbox **and** enqueues the run into it. The run's own `request` doubles as the
+  sandbox `purpose`, so the worker's namer titles the branch from it (`feat/…`, `adw/<id>` fallback)
+  — the operator types nothing extra. Both writes happen in **one transaction** (`control.ts`
+  ::`enqueueInNewSandbox`), so a rejected enqueue never leaves an orphan sandbox; the spine is intact
+  (two INSERTs, the worker disposes). Mutually exclusive with an explicit `sandbox_id` (schema-refused).
+  The `purpose` is capped to its column's 500 chars while the full `request` is stored untouched.
+  Contained to the cockpit (`QueueLauncher`, the queue page, `/api/queue`, `EnqueueSpecSchema` +
+  `enqueueInNewSandbox`) — no engine change, and it reuses the branch namer built for the create form.
 
 ## Verification plan
 
