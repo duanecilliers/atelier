@@ -415,12 +415,27 @@ class SandboxProfile(BaseModel):
     land: SandboxLand = Field(default_factory=SandboxLand)
 
 
+class SandboxNamer(BaseModel):
+    """How a sandbox's branch is named from its optional `purpose`. When a create
+    request carries a purpose (and no explicit branch), the worker asks a cheap
+    model — once, at provision — for a human-readable slug (`feat/api-rate-limiting`
+    rather than `adw/<id>`), then slugifies, validates, and dedupes it. The backend
+    is chosen by the model's provider prefix (`anthropic/*` → the local `claude`
+    CLI, else the `pi` backend), so it reuses the same auth as the coding agents and
+    needs no API key. Disabled, unset, or on any failure/offline → the deterministic
+    `adw/<id>` — naming is a legibility nicety, never a provisioning dependency."""
+
+    enabled: bool = True
+    model: str = "anthropic/claude-haiku-4-5"       # a cheap, fast model — one ~50-token turn
+
+
 class SandboxConfig(BaseModel):
     """The `sandbox:` block. A default level plus a named profile per non-trivial
     level. `default: local` (the factory default) is byte-identical to today —
     a run at REPO_ROOT with no worktree — until a launch overrides the level."""
 
     default: str = "local"
+    namer: SandboxNamer = Field(default_factory=SandboxNamer)  # human-readable branch names from `purpose`
     worktree: Optional[SandboxProfile] = None       # L1: worktree only
     worktree_env: Optional[SandboxProfile] = None   # L2: worktree + deps + ports + env
 

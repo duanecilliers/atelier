@@ -22,7 +22,7 @@ const MIGRATION_COLUMNS: Record<string, Set<string>> = {
   // lack it. The `sandboxes` table itself ships whole (a hard requirement) EXCEPT
   // its slice-4 land_* columns, which are ALTER-added over the shipped table.
   run_queue: new Set(['sandbox_id']),
-  sandboxes: new Set(['land_requested', 'land_result']),
+  sandboxes: new Set(['land_requested', 'land_result', 'purpose']),
 };
 
 function dbPath(): string {

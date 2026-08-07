@@ -36,8 +36,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from adw_modules import agents, git_helper, provision, queue, registry, sandboxes, workers
-from adw_modules.data_types import SandboxConfig, SandboxProfile
+from adw_modules import agents, branch_namer, git_helper, provision, queue, registry, sandboxes, workers
+from adw_modules.data_types import SandboxConfig, SandboxNamer, SandboxProfile
 from adw_modules.utils import ensure_dir, now_iso
 
 # The repo (git) root every ADW is launched in, so its relative config paths and
@@ -255,7 +255,7 @@ def _reap_services(sandbox_id: str, cwd: str | Path, ctx: dict[str, str],
 
 
 def provision_sandbox(conn: sqlite3.Connection, row: sqlite3.Row,
-                      profile: SandboxProfile | None) -> None:
+                      profile: SandboxProfile | None, namer: SandboxNamer) -> None:
     """Turn a `requested` sandbox into an `active` worktree, or mark it `failed`.
 
     L1 (no profile) is just the worktree. A profile (worktree_env) additionally
@@ -263,11 +263,19 @@ def provision_sandbox(conn: sqlite3.Connection, row: sqlite3.Row,
     free port per `ports` entry (persisted as JSON on the row), run the project's
     `setup` commands, then bring its backing `services.up`. Any failure — git, a
     setup command, or `services.up` — marks the sandbox `failed` and spawns no runs
-    into it."""
+    into it.
+
+    The branch is resolved first (branch_namer): an explicit branch on the row wins;
+    otherwise a `purpose` yields a readable slug via a cheap model, falling back to
+    `adw/<id>`. The resolved name is persisted so the cockpit shows it and later
+    reconcile passes (_row_ctx / sandbox_run_env) read it back."""
     sid = row["id"]
-    branch = row["branch"] or f"adw/{sid}"
+    branch = branch_namer.resolve_branch(row, namer, str(REPO_ROOT))
     path = worktree_path_for(sid)
     sandboxes.set_status(conn, sid, sandboxes.PROVISIONING)
+    # Persist the resolved name (the row's branch is NULL for a purpose-named sandbox)
+    # so the cockpit and later reconcile reads see the real branch, not a fallback.
+    sandboxes.set_branch(conn, sid, branch)
     ports: dict[str, int] = {}
     services_up_attempted = False
     try:
@@ -418,7 +426,7 @@ def reconcile_sandboxes(conn: sqlite3.Connection, jobs: dict[int, Job],
     """One reconciliation pass: provision new sandboxes, tear down retired ones,
     and fail runs orphaned by a dead sandbox. Called every poll."""
     for row in sandboxes.with_status(conn, sandboxes.REQUESTED):
-        provision_sandbox(conn, row, sandbox_cfg.profile_for(row["level"]))
+        provision_sandbox(conn, row, sandbox_cfg.profile_for(row["level"]), sandbox_cfg.namer)
     # Only tear down / land a sandbox with no run currently in flight — a live run
     # keeps its tree busy (a land hook and a run must not race on the same tree); it
     # is reaped from `jobs` first, below, so a retire/land waits at most one poll.

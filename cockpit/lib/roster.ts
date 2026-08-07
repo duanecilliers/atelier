@@ -132,8 +132,17 @@ const SandboxProfileSchema = z.object({
   land: SandboxLandSchema.default({}),
 });
 
+// Mirror of data_types.py: SandboxNamer — how a sandbox's branch is named from its
+// optional `purpose` (a cheap one-shot model call at provision, backend chosen by the
+// model's provider prefix). Cockpit reads it for the roster editor; the engine acts on it.
+const SandboxNamerSchema = z.object({
+  enabled: z.boolean().default(true),
+  model: z.string().default('anthropic/claude-haiku-4-5'),
+});
+
 const SandboxConfigSchema = z.object({
   default: z.string().default('local'),
+  namer: SandboxNamerSchema.default({}),
   worktree: SandboxProfileSchema.optional(),
   worktree_env: SandboxProfileSchema.optional(),
 });
@@ -152,6 +161,66 @@ export const RosterConfigSchema = z.object({
 export type RosterConfig = z.infer<typeof RosterConfigSchema>;
 export type RosterAgent = z.infer<typeof AgentConfigSchema>;
 export type RosterDefaults = z.infer<typeof ConfigDefaultsSchema>;
+export type SandboxConfig = z.infer<typeof SandboxConfigSchema>;
+
+// ── Sandbox launch options (the create path's view of the `sandbox:` block) ────
+// The engine mints a sandbox's branch from its LEVEL's profile `branch` template,
+// with ${SANDBOX_ID} filled in at create (adw_worker.py reads sandboxes.branch;
+// profile.branch is otherwise never consulted). These helpers surface that config
+// to the cockpit's "+ New sandbox" launcher — which level(s) to offer, which to
+// preselect, and the branch template createSandbox interpolates. `local` is never
+// offered here: it is the no-sandbox default (a run at REPO_ROOT), not a row.
+
+/** The default branch template when a level declares no profile — matches the
+ *  engine's fallback in adw_worker.py (`adw/<sandbox-id>`). */
+export const DEFAULT_SANDBOX_BRANCH_TEMPLATE = 'adw/${SANDBOX_ID}';
+
+/** The two provisionable levels the create UI may offer (the bounded vocabulary
+ *  minus `local`). Kept a literal union so it lines up with the seam enum. */
+export type ProvisionableSandboxLevel = 'worktree' | 'worktree_env';
+
+export interface SandboxLaunchOption {
+  level: ProvisionableSandboxLevel;
+  /** The branch template for this level, ${SANDBOX_ID} interpolated at create. */
+  branchTemplate: string;
+}
+
+export interface SandboxLaunchOptions {
+  levels: SandboxLaunchOption[];
+  /** The level the picker preselects. */
+  defaultLevel: ProvisionableSandboxLevel;
+}
+
+/** Which provisionable levels to offer, and which to preselect, for a project's
+ *  `sandbox:` config. `worktree` (L1) is always offerable — a bare worktree needs
+ *  no profile; `worktree_env` (L2) only when the project declares its profile
+ *  (else it would provision nothing extra, so offering it would mislead). The
+ *  preselected level honors `sandbox.default` when it is an offered provisionable
+ *  level, else falls back to `worktree`. */
+export function sandboxLaunchOptions(cfg: SandboxConfig): SandboxLaunchOptions {
+  const levels: SandboxLaunchOption[] = [
+    { level: 'worktree', branchTemplate: cfg.worktree?.branch ?? DEFAULT_SANDBOX_BRANCH_TEMPLATE },
+  ];
+  if (cfg.worktree_env) {
+    levels.push({
+      level: 'worktree_env',
+      branchTemplate: cfg.worktree_env.branch ?? DEFAULT_SANDBOX_BRANCH_TEMPLATE,
+    });
+  }
+  const defaultLevel = levels.some((l) => l.level === cfg.default)
+    ? (cfg.default as ProvisionableSandboxLevel)
+    : 'worktree';
+  return { levels, defaultLevel };
+}
+
+/** The branch template for a provisionable level — what createSandbox interpolates
+ *  ${SANDBOX_ID} into. Falls back to the engine default when the level (or its
+ *  profile) declares none, so an un-configured project still branches `adw/<id>`. */
+export function sandboxBranchTemplate(cfg: SandboxConfig, level: string): string {
+  if (level === 'worktree_env') return cfg.worktree_env?.branch ?? DEFAULT_SANDBOX_BRANCH_TEMPLATE;
+  if (level === 'worktree') return cfg.worktree?.branch ?? DEFAULT_SANDBOX_BRANCH_TEMPLATE;
+  return DEFAULT_SANDBOX_BRANCH_TEMPLATE;
+}
 
 // ── The editable surface ──────────────────────────────────────────────────────
 // Scalars (round 1): model, coding_agent, thinking, color, purpose per agent;

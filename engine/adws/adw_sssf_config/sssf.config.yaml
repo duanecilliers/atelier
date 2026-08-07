@@ -64,6 +64,13 @@ quality:
 # each allocated port name (`${WEB}`) interpolate into setup/env/services/land.
 sandbox:
   default: local
+  # namer: turn a sandbox's optional `purpose` into a human-readable branch at provision
+  # (feat/api-rate-limiting rather than adw/<id>). Defaults shown; a cheap model, one turn.
+  # An anthropic/* model runs through the local `claude` CLI (no API key); anything else
+  # through pi (e.g. an openai-codex model). Disabled or no purpose → the adw/<id> fallback.
+  namer:
+    enabled: true
+    model: anthropic/claude-haiku-4-5
   worktree_env:                       # L2: worktree + deps + ports + env
     branch: adw/${SANDBOX_ID}         # named branch the worktree checks out (survives teardown)
     setup:                            # shell commands, run once at create (cwd = the worktree)

@@ -255,8 +255,12 @@ export interface Sandbox {
   level: string | null;
   /** Where the worktree lives on the worker host; null until the worker provisions it. */
   worktree_path: string | null;
-  /** The named branch the worktree checks out. */
+  /** The named branch the worktree checks out. Null at create when a `purpose` is
+   *  set — the worker names it at provision and writes it back. */
   branch: string | null;
+  /** Optional human intent the worker turns into a readable branch (branch_namer).
+   *  (migration-added) */
+  purpose?: string | null;
   /** JSON name→port map (slice 2); null until then. */
   ports: string | null;
   status: SandboxStatus | null;

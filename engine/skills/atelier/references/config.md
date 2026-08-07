@@ -235,6 +235,9 @@ every run is `local` (the repo root, byte-identical to today).
 ```yaml
 sandbox:
   default: local                 # level a launch uses when it doesn't override
+  namer:                         # human-readable branch from a sandbox's optional `purpose`
+    enabled: true
+    model: anthropic/claude-haiku-4-5
   worktree_env:                  # the L2 profile — keyed by level name
     branch: adw/${SANDBOX_ID}    # named branch the worktree checks out (survives teardown)
     setup:                       # shell commands, run ONCE at create (cwd = the worktree)
@@ -254,9 +257,10 @@ sandbox:
 
 | Field | Meaning |
 |---|---|
-| `default` | Level a launch uses when it doesn't pick one: `local` (no worktree) · `worktree` (L1, write isolation) · `worktree_env` (L2, + deps/ports/services/env). The level vocabulary is a **bounded seam enum** (shared with the cockpit); provisioning and landing are per-project. |
+| `default` | Level the cockpit's create picker preselects: `local` (no worktree) · `worktree` (L1, write isolation) · `worktree_env` (L2, + deps/ports/services/env). The level vocabulary is a **bounded seam enum** (shared with the cockpit); provisioning and landing are per-project. `default: local` preselects `worktree` (a sandbox row is always provisionable). |
+| `namer` | Turn a sandbox's optional **`purpose`** (the create UI's "what's this for?") into a readable branch. `namer.enabled` (default true) + `namer.model` (default `anthropic/claude-haiku-4-5`): with a purpose and no explicit branch, the **worker** asks this cheap model once at provision for a slug (`feat/api-rate-limiting`), then slugifies/validates/dedupes it. `anthropic/*` → local `claude` CLI, else `pi` (same auth as the coding agents). Disabled/no purpose/any failure → `adw/<id>`; naming never blocks provisioning. |
 | `<level>:` | A profile block **keyed by level name** (`worktree_env` above). A project declares one per non-`local` level it uses. |
-| `branch` | The named branch the worktree checks out. Survives teardown in the shared `.git`. |
+| `branch` | The named branch the worktree checks out. Survives teardown in the shared `.git`. The template default `adw/${SANDBOX_ID}` applies when a sandbox is created **without** a `purpose`; with a purpose, `namer` supersedes it. |
 | `setup` | Shell commands run once at create, `cwd` = the worktree. Warms deps so follow-up runs start instantly. |
 | `ports` | `NAME: auto` → the engine probes a free port and exposes it as `${NAME}` to `setup`/`services`/`env`/`land` **and** injects it into every run's process env, so the app reads the same port its services bound to. |
 | `services.up` / `services.down` | Bring backing services up at create / down at shutdown (and best-effort during orphan reaping). Shell strings — the engine is **mechanism-agnostic** (compose, testcontainers, anything). `-p ${SANDBOX_ID}` makes `down` targetable even after a worker restart. Atelier itself needs none. |

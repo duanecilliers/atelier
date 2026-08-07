@@ -106,7 +106,10 @@ MIGRATIONS = [("agent_sessions", "color", "TEXT"),
               # sandboxes predates its slice-4 land seam; add the control flag +
               # captured-result columns to an existing sandboxes table via ALTER.
               ("sandboxes", "land_requested", "INTEGER DEFAULT 0"),
-              ("sandboxes", "land_result", "TEXT")]
+              ("sandboxes", "land_result", "TEXT"),
+              # sandboxes also predates `purpose` (the human intent the worker names
+              # a branch from); add it to an existing table via ALTER.
+              ("sandboxes", "purpose", "TEXT")]
 
 
 class Tracer:

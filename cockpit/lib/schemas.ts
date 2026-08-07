@@ -165,6 +165,7 @@ export const SandboxRowSchema = z.object({
   level: z.string().nullable(),
   worktree_path: z.string().nullable(),
   branch: z.string().nullable(),
+  purpose: z.string().nullable().optional(), // migration-added; the worker names a branch from it
   ports: z.string().nullable(),
   status: z.string().nullable(),
   tip_sha: z.string().nullable(),

@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS sandboxes (
   project_root       TEXT,                -- the repo this sandbox belongs to (display; the worker keys off its own REPO_ROOT)
   level              TEXT,                -- local | worktree | worktree_env | … (bounded vocab; roster-constants.ts)
   worktree_path      TEXT,                -- filled by the worker at provision; NULL until active
-  branch             TEXT,                -- the named branch the worktree checks out
+  branch             TEXT,                -- the named branch the worktree checks out; NULL when the worker names it from `purpose` at provision
+  purpose            TEXT,                -- optional human intent; the worker turns it into a readable branch (branch_namer.py) when `branch` is NULL
   ports              TEXT,                -- JSON name->port (slice 2); NULL until then
   status             TEXT DEFAULT 'requested', -- requested -> provisioning -> active -> shutting_down -> gone | failed
   tip_sha            TEXT,                -- HEAD of the worktree, refreshed after each run
@@ -60,22 +61,25 @@ FAILED = "failed"
 # orphaned queued runs instead of letting them wait forever.
 DEAD = frozenset({GONE, FAILED})
 
-_COLS = ("id, project_root, level, worktree_path, branch, ports, status,"
+_COLS = ("id, project_root, level, worktree_path, branch, purpose, ports, status,"
          " tip_sha, shutdown_requested, land_requested, land_result, error, created_at")
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
-    """Create the sandboxes table if absent, and self-heal the additive land_*
-    columns (slice 4). The base table predates them, so CREATE IF NOT EXISTS won't
-    add them to an existing db — an explicit ALTER does, the same additive-migration
-    discipline queue.py and the tracer use. Done here so the worker (which polls
-    land_requested and writes land_result) is correct even on an older db."""
+    """Create the sandboxes table if absent, and self-heal the additive columns
+    added after it shipped — the slice-4 land_* flags and `purpose`. The base table
+    predates them, so CREATE IF NOT EXISTS won't add them to an existing db — an
+    explicit ALTER does, the same additive-migration discipline queue.py and the
+    tracer use. Done here so the worker (which polls land_requested, writes
+    land_result, and reads purpose to name a branch) is correct even on an older db."""
     conn.executescript(SANDBOXES_DDL)
     columns = {row[1] for row in conn.execute("PRAGMA table_info(sandboxes)")}
     if "land_requested" not in columns:
         conn.execute("ALTER TABLE sandboxes ADD COLUMN land_requested INTEGER DEFAULT 0")
     if "land_result" not in columns:
         conn.execute("ALTER TABLE sandboxes ADD COLUMN land_result TEXT")
+    if "purpose" not in columns:
+        conn.execute("ALTER TABLE sandboxes ADD COLUMN purpose TEXT")
 
 
 def with_status(conn: sqlite3.Connection, status: str) -> list[sqlite3.Row]:
@@ -142,6 +146,14 @@ def set_status(conn: sqlite3.Connection, sandbox_id: str, status: str, *,
         params.append(error)
     params.append(sandbox_id)
     conn.execute(f"UPDATE sandboxes SET {', '.join(sets)} WHERE id=?", params)
+
+
+def set_branch(conn: sqlite3.Connection, sandbox_id: str, branch: str) -> None:
+    """Record the branch the worktree checks out. Written at provision — the row's
+    `branch` is NULL when the worker names it from `purpose` (branch_namer), so this
+    persists the resolved name for the cockpit and for later reads (_row_ctx,
+    sandbox_run_env) that re-query the row."""
+    conn.execute("UPDATE sandboxes SET branch=? WHERE id=?", (branch, sandbox_id))
 
 
 def set_ports(conn: sqlite3.Connection, sandbox_id: str, ports_json: str) -> None:

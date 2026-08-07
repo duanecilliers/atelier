@@ -7,8 +7,9 @@
 > operating reference now lives in the numbered guides — [`07-operations.md`](../07-operations.md#5-sandboxes--isolated-persistent-workspaces)
 > (worker reconcile/reap), [`05-config-and-roster.md`](../05-config-and-roster.md#8-the-sandbox-block--isolated-workspaces)
 > (the `sandbox:` block), and [`08-extending-the-system.md`](../08-extending-the-system.md#the-sandbox-feature-is-the-worked-example)
-> (Recipe E as the worked seam change). One follow-on remains deferred: the **new-vs-attach
-> launcher** (a level picker + reading `sandbox.default` / templating `profile.branch`) — see
+> (Recipe E as the worked seam change). The once-deferred **launcher work has since landed**: the
+> create path now reads `sandbox.default`, shows a level picker when a `worktree_env` profile is
+> declared, and templates `profile.branch` at create — see
 > [§ Open questions](#open-questions-settled-during-build), reconciled below.
 >
 > **History.** (1) Originally scoped to L1 ephemeral parallel-write isolation for the "80% junk work."
@@ -169,6 +170,28 @@ sandbox:
   are available to `setup`, `services`, `env`, and `land`. Allocated ports + the profile `env` are
   injected into every run's process env, so the agent/app read the same ports the services bound to.
 
+## Human-readable branch names (the namer)
+
+A worktree on `adw/3f2a1b9c` tells you nothing; `feat/api-rate-limiting` tells you everything. So a
+sandbox may carry an optional **`purpose`** (free text on create), and the **worker** turns it into
+a readable branch at provision — a one-shot cheap-model call (`sandbox.namer`, default
+`anthropic/claude-haiku-4-5`), slugified to the git-ref + shell-safe charset, deduped against
+existing branches, with a hard fallback to `adw/<id>`. Decisions that shaped it:
+
+- **Naming lives engine-side (the worker), not the cockpit.** Model auth (the local `claude`/`pi`
+  login), the backend abstraction, and the `anthropic/* → claude` routing all live in the engine;
+  the cockpit is a thin control layer that only INSERTs rows. So the cockpit stores `purpose` and
+  leaves `branch` NULL; the worker names it and writes it back (`sandboxes.set_branch`) — like
+  `tip_sha`, a provisioning output. A create with no purpose keeps the create-time template path.
+- **Backend by provider prefix, no new dependency.** `anthropic/*` shells to the local `claude` CLI
+  **tool-less** (`--allowedTools ""` — an agentic `claude -p` otherwise tries to *do* the task, not
+  name it); anything else (an `openai-codex/*` model — the Codex alternative) reuses the
+  subprocess-based `pi` backend. Neither adds a PEP 723 dep to the worker.
+- **Never a provisioning dependency.** Disabled, no purpose, an unsafe/empty reply, a model error,
+  or offline → `adw/<id>`. The branch is recorded on the row exactly as before; naming is a
+  legibility layer, never part of acceptance. The generated name is re-validated (git-ref +
+  shell-safe) before it reaches the row it interpolates into shell hooks through `${BRANCH}`.
+
 ## Seam changes (Recipe E discipline)
 
 Two new pieces, mirrored Python↔TS per
@@ -182,7 +205,12 @@ Two new pieces, mirrored Python↔TS per
   Mirror in `queue.py` DDL, `tracer.py` MIGRATIONS, `control.ts` (DDL + `EnqueueSpecSchema` +
   INSERT/SELECT), `schemas.ts`, `types.ts`, `check-contract.ts` `MIGRATION_COLUMNS`, `db.ts::queue()`.
 - **Config seam** — `SSSFConfig.sandbox` in `data_types.py` (Pydantic), mirrored by hand in
-  `cockpit/lib/roster.ts` (Zod), with the level vocabulary in `roster-constants.ts`.
+  `cockpit/lib/roster.ts` (Zod), with the level vocabulary in `roster-constants.ts`. Later added
+  `SandboxNamer` (`sandbox.namer`) alongside it, same by-hand mirror.
+- **`sandboxes.purpose`** (nullable TEXT, migration-added) — the human intent the worker names a
+  branch from; `branch` is left NULL at create when a purpose is given. Mirror in `sandboxes.py`
+  DDL/`ensure_schema`, `tracer.py` MIGRATIONS, `control.ts` (DDL + self-heal + `CreateSandboxSpec` +
+  INSERT), `schemas.ts`, `types.ts`, `check-contract.ts` `MIGRATION_COLUMNS`, `db.ts::sandboxes()`.
 
 **Control-plane invariant preserved.** Create sandbox = INSERT a `sandboxes` row (status
 `requested`); land / shut down = set a column (`land_requested` / `shutdown_requested`). The **worker**
@@ -218,8 +246,8 @@ land hook (branch left for manual merge).
 
 ## Open questions (settled during build)
 
-Every question below was resolved during implementation; the one genuine remainder is the
-new-vs-attach launcher, deferred to a future slice.
+Every question below was resolved during implementation. The last remainder — the launcher's
+level picker + `sandbox.default` + branch templating — has since landed (see **New vs attach**).
 
 - **Worktree location** — **SETTLED: outside the repo** (`~/.atelier/worktrees/<project>/<sandbox-id>`).
   No project `.gitignore` change, `show-toplevel` still resolves inside it.
@@ -244,11 +272,16 @@ new-vs-attach launcher, deferred to a future slice.
   no data-loss cliff to warn about; landing is a separate, non-destructive action. A "you have
   un-landed commits" advisory could still be added to the shutdown button later, but nothing is lost
   without it.
-- **New vs attach** — **DEFERRED (the one remaining follow-on).** The launcher is still "create
-  requests an L1 `worktree`; attach a run by picking an active sandbox's *run here →*". A real
-  new-vs-attach launcher — a level picker, reading `sandbox.default`, and templating
-  `profile.branch` — is future work; `sandbox.default` and `profile.branch` are defined and
-  validated but not yet consulted by the create path.
+- **New vs attach** — **SETTLED: the create path now reads config.** "+ New sandbox" preselects
+  `sandbox.default` (falling back to `worktree` when it is `local` or names an undeclared level),
+  shows a level picker whenever a `worktree_env` profile is declared beside the always-available L1
+  `worktree`, and mints the selected level's branch from its `profile.branch` template
+  (`${SANDBOX_ID}` interpolated at create). Config is the authority — the template is resolved
+  server-side in `/api/sandboxes`, never supplied by the client, and the interpolated branch is
+  re-validated (git-ref + shell-safe) before it reaches the row. Attach is unchanged: an active
+  sandbox's *run here →* binds a run via `sandbox_id`. Contained to the cockpit create path
+  (`NewSandboxButton`, the sandboxes page, `/api/sandboxes`, `lib/roster.ts`, `createSandbox`) — no
+  engine change, since the worker already reads `sandboxes.branch`.
 
 ## Verification plan
 

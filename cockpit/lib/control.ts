@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS sandboxes (
   level              TEXT,
   worktree_path      TEXT,
   branch             TEXT,
+  purpose            TEXT,
   ports              TEXT,
   status             TEXT DEFAULT 'requested',
   tip_sha            TEXT,
@@ -94,6 +95,10 @@ export const CreateSandboxSpecSchema = z.object({
       const err = validateBranchName(b);
       if (err) ctx.addIssue({ code: z.ZodIssueCode.custom, message: err });
     }),
+  /** Optional human intent ("add rate limiting to the API"). When set and no explicit
+   *  `branch` is given, the branch is left NULL at create and the worker names it from
+   *  this via a cheap model (branch_namer.py), falling back to `adw/<id>`. */
+  purpose: z.string().trim().max(500).nullable().optional(),
 });
 export type CreateSandboxSpec = z.infer<typeof CreateSandboxSpecSchema>;
 
@@ -163,6 +168,12 @@ export class AtelierControl {
     if (!sbCols.some((c) => c.name === 'land_result')) {
       this.db.exec('ALTER TABLE sandboxes ADD COLUMN land_result TEXT');
     }
+    // Same for `purpose` (the human intent the worker names a branch from) over a
+    // sandboxes table made before it — the write-side mirror of tracer.py MIGRATIONS
+    // and sandboxes.py::ensure_schema. We INSERT into it.
+    if (!sbCols.some((c) => c.name === 'purpose')) {
+      this.db.exec('ALTER TABLE sandboxes ADD COLUMN purpose TEXT');
+    }
   }
 
   close(): void {
@@ -212,21 +223,45 @@ export class AtelierControl {
   // disposes — the cockpit never spawns a process.
 
   private readonly SANDBOX_COLS =
-    `id, project_root, level, worktree_path, branch, ports, status, tip_sha,
+    `id, project_root, level, worktree_path, branch, purpose, ports, status, tip_sha,
      shutdown_requested, land_requested, land_result, error, created_at`;
 
-  /** INSERT a sandbox request; returns the id the worker will provision under. */
-  createSandbox(spec: CreateSandboxSpec): { id: string } {
+  /** INSERT a sandbox request; returns the id the worker will provision under.
+   *
+   *  Branch resolution: an explicit `spec.branch` (a schema-validated, literal
+   *  operator override) wins; otherwise the sandbox branches from `branchTemplate`
+   *  — the selected level's profile `branch` from config — with `${SANDBOX_ID}`
+   *  filled in with the freshly minted id. The template is trusted (it comes from
+   *  the project's own config, resolved by the route), but we re-validate the
+   *  interpolated result: it is spliced into the row the worker reads AND (via the
+   *  profile's ${BRANCH}) into shell setup/land commands, so a malformed or unsafe
+   *  template must fail loudly here rather than at `git worktree add`. */
+  createSandbox(
+    spec: CreateSandboxSpec,
+    branchTemplate = 'adw/${SANDBOX_ID}',
+  ): { id: string } {
     const parsed = CreateSandboxSpecSchema.parse(spec);
     const id = newAdwId(); // same 8-hex shape as an adw_id
-    const branch = parsed.branch ?? `adw/${id}`;
+    const purpose = parsed.purpose?.trim() || null;
+    // Branch precedence: an explicit override wins; else, when a purpose is given,
+    // defer to the worker (branch NULL now → branch_namer mints a readable slug at
+    // provision, adw/<id> fallback); else interpolate the level's template now.
+    const branch = parsed.branch
+      ? parsed.branch
+      : purpose
+        ? null
+        : branchTemplate.replaceAll('${SANDBOX_ID}', id);
+    if (branch != null) {
+      const branchErr = validateBranchName(branch);
+      if (branchErr) throw new EnqueueError(`sandbox branch — ${branchErr}`);
+    }
     this.db
       .prepare(
-        `INSERT INTO sandboxes (id, project_root, level, branch, status,
+        `INSERT INTO sandboxes (id, project_root, level, branch, purpose, status,
                                 shutdown_requested, created_at)
-         VALUES (?, ?, ?, ?, 'requested', 0, ?)`,
+         VALUES (?, ?, ?, ?, ?, 'requested', 0, ?)`,
       )
-      .run(id, this.projectRoot, parsed.level, branch, nowIso());
+      .run(id, this.projectRoot, parsed.level, branch, purpose, nowIso());
     return { id };
   }
 

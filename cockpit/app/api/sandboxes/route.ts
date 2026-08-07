@@ -2,6 +2,20 @@ import { NextRequest, NextResponse } from 'next/server';
 import { ZodError } from 'zod';
 import { getDb } from '@/lib/data';
 import { getControl, CreateSandboxSpecSchema } from '@/lib/control';
+import { pathsForProject } from '@/lib/projects';
+import { readRoster, sandboxBranchTemplate, DEFAULT_SANDBOX_BRANCH_TEMPLATE } from '@/lib/roster';
+
+/** The branch template for `level` from THIS project's `sandbox:` config — what
+ *  createSandbox interpolates ${SANDBOX_ID} into. Config is authority on the
+ *  branch (never the client), so we read it here. A missing/unreadable config is
+ *  not fatal to creating an L1 sandbox — fall back to the engine default. */
+function branchTemplateFor(projectId: string | undefined, level: string): string {
+  try {
+    return sandboxBranchTemplate(readRoster(pathsForProject(projectId).configPath).sandbox, level);
+  } catch {
+    return DEFAULT_SANDBOX_BRANCH_TEMPLATE;
+  }
+}
 
 // The sandbox control seam's HTTP face. GET lists sandboxes; POST requests a new
 // one (status `requested`) for the worker to provision. Both scope to ?project=<id>.
@@ -29,7 +43,7 @@ export async function POST(req: NextRequest) {
   }
   try {
     const spec = CreateSandboxSpecSchema.parse(body ?? {});
-    const { id } = getControl(projectId).createSandbox(spec);
+    const { id } = getControl(projectId).createSandbox(spec, branchTemplateFor(projectId, spec.level));
     return NextResponse.json({ id }, { status: 201 });
   } catch (e) {
     if (e instanceof ZodError) {
