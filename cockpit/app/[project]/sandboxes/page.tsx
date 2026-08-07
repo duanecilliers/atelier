@@ -4,6 +4,7 @@ import { Badge, Dot, type BadgeTone } from '@/components/terminal';
 import { LiveRefresh } from '@/components/LiveRefresh';
 import { NewSandboxButton } from '@/components/sandboxes/NewSandboxButton';
 import { ShutdownButton } from '@/components/sandboxes/ShutdownButton';
+import { LandButton } from '@/components/sandboxes/LandButton';
 import { ago } from '@/lib/format';
 import { sandboxesSig } from '@/lib/dashboard-signature';
 import { projectHref } from '@/lib/project-url';
@@ -87,6 +88,8 @@ function SandboxCard({ sb, now, projectId }: { sb: Sandbox; now: number; project
   const tone = STATUS_TONE[status] ?? 'default';
   const terminal = TERMINAL_SANDBOX_STATUSES.includes(status);
   const shuttingDown = sb.shutdown_requested === 1 && !terminal;
+  // A land requested but not yet claimed (worker still on a prior poll), or in flight.
+  const landPending = (sb.land_requested === 1 || status === 'landing') && !shuttingDown;
 
   return (
     <div className="flex flex-col gap-2.5 bg-os-surface p-4">
@@ -111,6 +114,11 @@ function SandboxCard({ sb, now, projectId }: { sb: Sandbox; now: number; project
         {sb.worktree_path && (
           <Row term="tree">
             <span className="break-all text-os-muted">{sb.worktree_path}</span>
+          </Row>
+        )}
+        {sb.land_result && (
+          <Row term="land">
+            <span className="break-all text-os-text">{sb.land_result}</span>
           </Row>
         )}
       </dl>
@@ -140,7 +148,16 @@ function SandboxCard({ sb, now, projectId }: { sb: Sandbox; now: number; project
         ) : terminal ? (
           <span className="font-mono text-[9.5px] uppercase tracking-[0.14em] text-os-dim">—</span>
         ) : (
-          <ShutdownButton id={sb.id} />
+          <div className="flex items-center gap-2">
+            {landPending ? (
+              <span className="font-mono text-[9.5px] uppercase tracking-[0.14em] text-os-warn">
+                landing…
+              </span>
+            ) : (
+              status === 'active' && <LandButton id={sb.id} />
+            )}
+            <ShutdownButton id={sb.id} />
+          </div>
         )}
       </div>
     </div>

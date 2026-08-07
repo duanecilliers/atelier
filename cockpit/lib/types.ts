@@ -264,6 +264,12 @@ export interface Sandbox {
   tip_sha: string | null;
   /** SQLite integer boolean — the cockpit sets this to ask the worker to tear down. */
   shutdown_requested: number | null;
+  /** SQLite integer boolean — the cockpit sets this to ask the worker to run the
+   *  `land` hook. Cleared by the worker as it claims the request. (migration-added) */
+  land_requested: number | null;
+  /** Captured land-hook output (a PR URL / merge summary) the worker records for the
+   *  cockpit to surface after a successful land. (migration-added) */
+  land_result: string | null;
   /** Provisioning/teardown failure detail. */
   error: string | null;
   created_at: string | null;

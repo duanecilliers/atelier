@@ -155,8 +155,9 @@ export const WorkerRowSchema = z.object({
  * The cockpit WRITES it (INSERT a `requested` row; flip `shutdown_requested`); the
  * worker (engine/adws/adw_worker.py) provisions/disposes and owns every engine
  * column. DDL source: engine/adws/adw_modules/sandboxes.py. All columns ship in the
- * CREATE (not migration-added), so a fresh `sandboxes` table is a hard requirement
- * of check:contract.
+ * CREATE (not migration-added) EXCEPT the slice-4 land_* columns, so a fresh
+ * `sandboxes` table is a hard requirement of check:contract but land_* are tolerated
+ * absent on an older db (MIGRATION_COLUMNS there).
  */
 export const SandboxRowSchema = z.object({
   id: z.string(),
@@ -168,6 +169,8 @@ export const SandboxRowSchema = z.object({
   status: z.string().nullable(),
   tip_sha: z.string().nullable(),
   shutdown_requested: sqliteBool,
+  land_requested: sqliteBool.optional(), // migration-added (slice 4)
+  land_result: z.string().nullable().optional(), // migration-added (slice 4)
   error: z.string().nullable(),
   created_at: z.string().nullable(),
 });

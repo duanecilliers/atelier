@@ -26,12 +26,16 @@ export function queueSig(rows: RunQueueRow[]): string {
   return hash(rows.map((r) => `${r.id}:${r.status ?? ''}:${r.cancel_requested ?? ''}`).join('|'));
 }
 
-/** Sandbox list: each sandbox's status + shutdown flag + tip — captures
- *  provisioning, teardown, and a run committing a new tip into the tree. */
+/** Sandbox list: each sandbox's status + shutdown/land flags + tip + land result —
+ *  captures provisioning, teardown, a run committing a new tip, and a land landing. */
 export function sandboxesSig(rows: Sandbox[]): string {
   return hash(
     rows
-      .map((s) => `${s.id}:${s.status ?? ''}:${s.shutdown_requested ?? ''}:${s.tip_sha ?? ''}`)
+      .map(
+        (s) =>
+          `${s.id}:${s.status ?? ''}:${s.shutdown_requested ?? ''}:${s.land_requested ?? ''}:` +
+          `${s.tip_sha ?? ''}:${s.land_result ?? ''}`,
+      )
       .join('|'),
   );
 }

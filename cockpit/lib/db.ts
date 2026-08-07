@@ -696,11 +696,15 @@ export class AtelierDb {
   sandboxes(limit = 100, activeOnly = false): Sandbox[] {
     if (!this.hasTable('sandboxes')) return [];
     const where = activeOnly ? "WHERE status='active'" : '';
+    // land_requested/land_result are migration-added (slice 4); NULL them on an
+    // older db the tracer's ALTER hasn't reached, exactly like run_queue.sandbox_id.
+    const landReq = this.optionalColumn('sandboxes', 'land_requested');
+    const landRes = this.optionalColumn('sandboxes', 'land_result');
     return z.array(SandboxRowSchema).parse(
       this.db
         .prepare(
           `SELECT id, project_root, level, worktree_path, branch, ports, status,
-                  tip_sha, shutdown_requested, error, created_at
+                  tip_sha, shutdown_requested, ${landReq}, ${landRes}, error, created_at
              FROM sandboxes ${where} ORDER BY created_at DESC, rowid DESC LIMIT ?`,
         )
         .all(clamp(limit, 1, MAX_LIMIT)),

@@ -67,6 +67,8 @@ CREATE TABLE IF NOT EXISTS sandboxes (
   status             TEXT DEFAULT 'requested',
   tip_sha            TEXT,
   shutdown_requested INTEGER DEFAULT 0,
+  land_requested     INTEGER DEFAULT 0,
+  land_result        TEXT,
   error              TEXT,
   created_at         TEXT
 );`;
@@ -151,6 +153,16 @@ export class AtelierControl {
     if (!cols.some((c) => c.name === 'sandbox_id')) {
       this.db.exec('ALTER TABLE run_queue ADD COLUMN sandbox_id TEXT');
     }
+    // Same for the slice-4 land_* columns over a sandboxes table made before them
+    // (we flip land_requested) — the write-side mirror of tracer.py MIGRATIONS and
+    // sandboxes.py::ensure_schema.
+    const sbCols = this.db.prepare('PRAGMA table_info(sandboxes)').all() as { name: string }[];
+    if (!sbCols.some((c) => c.name === 'land_requested')) {
+      this.db.exec('ALTER TABLE sandboxes ADD COLUMN land_requested INTEGER DEFAULT 0');
+    }
+    if (!sbCols.some((c) => c.name === 'land_result')) {
+      this.db.exec('ALTER TABLE sandboxes ADD COLUMN land_result TEXT');
+    }
   }
 
   close(): void {
@@ -201,7 +213,7 @@ export class AtelierControl {
 
   private readonly SANDBOX_COLS =
     `id, project_root, level, worktree_path, branch, ports, status, tip_sha,
-     shutdown_requested, error, created_at`;
+     shutdown_requested, land_requested, land_result, error, created_at`;
 
   /** INSERT a sandbox request; returns the id the worker will provision under. */
   createSandbox(spec: CreateSandboxSpec): { id: string } {
@@ -225,6 +237,18 @@ export class AtelierControl {
     if (!sb) return null;
     if (sb.status && TERMINAL_SANDBOX_STATUSES.includes(sb.status)) return null;
     this.db.prepare('UPDATE sandboxes SET shutdown_requested=1 WHERE id=?').run(id);
+    return this.getSandbox(id);
+  }
+
+  /** Ask the worker to run this sandbox's `land` hook (flip `land_requested`).
+   *  Only an `active` sandbox can land — a run may only target an active tree and
+   *  the worktree must exist for the hook — so a non-active sandbox is rejected
+   *  (null). Idempotent; landing never destroys the sandbox. Returns the new state. */
+  requestLand(id: string): Sandbox | null {
+    const sb = this.getSandbox(id);
+    if (!sb) return null;
+    if (sb.status !== 'active') return null;
+    this.db.prepare('UPDATE sandboxes SET land_requested=1 WHERE id=?').run(id);
     return this.getSandbox(id);
   }
 
