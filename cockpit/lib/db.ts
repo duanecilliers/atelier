@@ -700,10 +700,11 @@ export class AtelierDb {
     // older db the tracer's ALTER hasn't reached, exactly like run_queue.sandbox_id.
     const landReq = this.optionalColumn('sandboxes', 'land_requested');
     const landRes = this.optionalColumn('sandboxes', 'land_result');
+    const purpose = this.optionalColumn('sandboxes', 'purpose'); // migration-added
     return z.array(SandboxRowSchema).parse(
       this.db
         .prepare(
-          `SELECT id, project_root, level, worktree_path, branch, ports, status,
+          `SELECT id, project_root, level, worktree_path, branch, ${purpose}, ports, status,
                   tip_sha, shutdown_requested, ${landReq}, ${landRes}, error, created_at
              FROM sandboxes ${where} ORDER BY created_at DESC, rowid DESC LIMIT ?`,
         )

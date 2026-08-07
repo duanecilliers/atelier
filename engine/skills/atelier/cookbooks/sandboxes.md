@@ -30,11 +30,14 @@ holding onto:
 | `worktree_env` (L2) | above **+** isolated deps, per-sandbox ports, backing services, scoped env | + `setup`, allocated `ports`, `services.up`, injected `env` |
 
 `local` is byte-identical to a normal run — no sandbox row, no worktree. The two provisionable
-levels are what the worker acts on. **The cockpit's "+ New sandbox" currently requests an L1
-`worktree`** (no level picker yet — that and reading `sandbox.default` land with the new-vs-attach
-launcher work). The engine fully provisions `worktree_env` when a sandbox's `level` is set to it
-(e.g. a direct control INSERT, or the future launcher) and the project declares a `worktree_env`
-profile in its config — see [references/config.md](../references/config.md#sandbox).
+levels are what the worker acts on. **The cockpit's "+ New sandbox" preselects `sandbox.default`**
+(falling back to `worktree` when it is `local` or names an undeclared level) and shows a **level
+picker** whenever the project declares a `worktree_env` profile beside the always-available L1
+`worktree`; the selected level's branch is minted from its `profile.branch` template
+(`${SANDBOX_ID}` interpolated at create). A project with no `worktree_env` profile keeps the
+single-button `worktree` UX. The engine fully provisions `worktree_env` when a sandbox's `level` is
+set to it and the project declares a `worktree_env` profile — see
+[references/config.md](../references/config.md#sandbox).
 
 ## Lifecycle
 
@@ -56,13 +59,25 @@ intent — no page ever spawns a process.
 
 - **Create** — **+ New sandbox** POSTs `/api/sandboxes`, which INSERTs a `requested` row. The next
   `just worker` poll provisions the worktree and flips it to `active`. (By hand: INSERT a
-  `sandboxes` row via `AtelierControl.createSandbox` — same write path.)
+  `sandboxes` row via `AtelierControl.createSandbox` — same write path.) The create form takes an
+  optional **purpose** ("what's this sandbox for?"): with a purpose and no explicit branch, the row
+  is created with `branch` NULL and the **worker names the branch from the purpose** at provision
+  via a cheap model (`sandbox.namer`, default Haiku) → e.g. `feat/api-rate-limiting`, falling back
+  to `adw/<id>`. The card shows `naming…` until it lands. See `sandbox.namer` in
+  [references/config.md](../references/config.md#sandbox).
 - **Attach a run** — from an `active` sandbox card, **run here →** links to the Conductor
   (`/<project>/queue`). Enqueuing with a `sandbox_id` binds the run to that sandbox; the worker
   spawns it with `cwd=<worktree>` and `SSSF_TRACE_ROOT=REPO_ROOT`, so **its trace still lands in
   the shared `sssf.db`** (that env var is the one correctness fix — observability paths absolutize
   against the trace root, execution paths follow `cwd`). A run enqueued against a gone/failed
   sandbox is rejected at enqueue; one whose sandbox dies mid-wait is failed as orphaned.
+- **Create-and-run in one step** — the Conductor's **Sandbox** dropdown also offers **＋ new
+  sandbox** (beside *local* and the attach list). Picking it shows the level toggle and, on Launch,
+  **creates a sandbox and enqueues the run into it** in one transaction (`AtelierControl`
+  ::`enqueueInNewSandbox`) — no orphan sandbox if the enqueue is rejected. The run's `request`
+  doubles as the sandbox `purpose`, so the **branch is named from the same text** you typed (the
+  namer above) with nothing extra to fill in. Mutually exclusive with picking an existing
+  `sandbox_id`.
 - **Land** — **Land** flips `land_requested`. The worker runs the project's `land` hook **once**,
   in the worktree, then returns the sandbox to `active`. The hook's captured stdout (a PR URL /
   merge summary) shows on the card as `land`. `mode: manual` (or no `land` configured) runs

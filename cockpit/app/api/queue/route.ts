@@ -27,7 +27,14 @@ export async function POST(req: NextRequest) {
   }
   try {
     const spec = EnqueueSpecSchema.parse(body);
-    const { id, adw_id } = getControl(projectId).enqueue(spec);
+    const control = getControl(projectId);
+    // The "＋ New sandbox" path creates a sandbox AND enqueues into it atomically;
+    // otherwise a plain enqueue (local run, or attach to an existing sandbox).
+    if (spec.new_sandbox) {
+      const { id, adw_id, sandbox_id } = control.enqueueInNewSandbox(spec);
+      return NextResponse.json({ id, adw_id, sandbox_id }, { status: 201 });
+    }
+    const { id, adw_id } = control.enqueue(spec);
     return NextResponse.json({ id, adw_id }, { status: 201 });
   } catch (e) {
     if (e instanceof ZodError) {

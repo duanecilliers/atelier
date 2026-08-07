@@ -8,6 +8,8 @@ import { LandButton } from '@/components/sandboxes/LandButton';
 import { ago } from '@/lib/format';
 import { sandboxesSig } from '@/lib/dashboard-signature';
 import { projectHref } from '@/lib/project-url';
+import { pathsForProject } from '@/lib/projects';
+import { readRoster, sandboxLaunchOptions, type SandboxLaunchOptions } from '@/lib/roster';
 import { TERMINAL_SANDBOX_STATUSES, type Sandbox, type SandboxStatus } from '@/lib/types';
 
 // A sandbox provisions and tears down as the worker reconciles it, so never cache.
@@ -34,9 +36,22 @@ function loadSandboxes(projectId: string): { sandboxes: Sandbox[]; error: string
   }
 }
 
+// The create picker's options come from this project's `sandbox:` config: which
+// provisionable levels to offer and which to preselect (sandbox.default). Config
+// is optional — an unreadable/absent one falls back to the always-available L1
+// worktree, so the launcher never hard-fails the page.
+function loadLaunchOptions(projectId: string): SandboxLaunchOptions {
+  try {
+    return sandboxLaunchOptions(readRoster(pathsForProject(projectId).configPath).sandbox);
+  } catch {
+    return { levels: [{ level: 'worktree', branchTemplate: 'adw/${SANDBOX_ID}' }], defaultLevel: 'worktree' };
+  }
+}
+
 export default function SandboxesPage({ params }: { params: { project: string } }) {
   const now = Date.now();
   const { sandboxes, error } = loadSandboxes(params.project);
+  const launch = loadLaunchOptions(params.project);
 
   return (
     <div className="view">
@@ -65,7 +80,7 @@ export default function SandboxesPage({ params }: { params: { project: string } 
       ) : (
         <>
           <div className="mb-6">
-            <NewSandboxButton />
+            <NewSandboxButton levels={launch.levels} defaultLevel={launch.defaultLevel} />
           </div>
 
           {sandboxes.length === 0 ? (
@@ -109,7 +124,17 @@ function SandboxCard({ sb, now, projectId }: { sb: Sandbox; now: number; project
       </div>
 
       <dl className="flex flex-col gap-1 font-mono text-[10.5px] text-os-dim">
-        <Row term="branch">{sb.branch ?? '—'}</Row>
+        {sb.purpose && (
+          <Row term="for">
+            <span className="text-os-muted">{sb.purpose}</span>
+          </Row>
+        )}
+        <Row term="branch">
+          {sb.branch ?? (
+            // Null branch + still provisioning → the worker is naming it from `purpose`.
+            terminal ? '—' : <span className="text-os-dim">naming…</span>
+          )}
+        </Row>
         <Row term="tip">{sb.tip_sha ?? <span className="text-os-dim">— no runs yet</span>}</Row>
         {sb.worktree_path && (
           <Row term="tree">

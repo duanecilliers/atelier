@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS sandboxes (
   level              TEXT,
   worktree_path      TEXT,
   branch             TEXT,
+  purpose            TEXT,
   ports              TEXT,
   status             TEXT DEFAULT 'requested',
   tip_sha            TEXT,
@@ -94,6 +95,10 @@ export const CreateSandboxSpecSchema = z.object({
       const err = validateBranchName(b);
       if (err) ctx.addIssue({ code: z.ZodIssueCode.custom, message: err });
     }),
+  /** Optional human intent ("add rate limiting to the API"). When set and no explicit
+   *  `branch` is given, the branch is left NULL at create and the worker names it from
+   *  this via a cheap model (branch_namer.py), falling back to `adw/<id>`. */
+  purpose: z.string().trim().max(500).nullable().optional(),
 });
 export type CreateSandboxSpec = z.infer<typeof CreateSandboxSpecSchema>;
 
@@ -101,15 +106,34 @@ export type CreateSandboxSpec = z.infer<typeof CreateSandboxSpecSchema>;
  *  dynamic allowlist — so a cockpit-built ADW is launchable at once) is checked
  *  in enqueue() against THIS project's adws/ dir, not here, since the schema has
  *  no project context; the worker re-checks it before it spawns anything. */
-export const EnqueueSpecSchema = z.object({
-  adw_name: z.string().trim().min(1).max(64),
-  request: z.string().trim().min(1, 'request is required').max(20_000),
-  agent: z.string().trim().min(1).max(64).nullable().optional(),
-  config: z.string().trim().min(1).max(512).nullable().optional(),
-  /** Bind this run to a sandbox (sandboxes.id); omitted/null = a local run at REPO_ROOT. */
-  sandbox_id: z.string().trim().min(1).max(64).nullable().optional(),
-  requested_by: z.string().trim().min(1).max(120).nullable().optional(),
-});
+export const EnqueueSpecSchema = z
+  .object({
+    adw_name: z.string().trim().min(1).max(64),
+    request: z.string().trim().min(1, 'request is required').max(20_000),
+    agent: z.string().trim().min(1).max(64).nullable().optional(),
+    config: z.string().trim().min(1).max(512).nullable().optional(),
+    /** Bind this run to an EXISTING sandbox (sandboxes.id); omitted/null = a local
+     *  run at REPO_ROOT. Mutually exclusive with `new_sandbox`. */
+    sandbox_id: z.string().trim().min(1).max(64).nullable().optional(),
+    /** Create a FRESH sandbox and run inside it (the "＋ New sandbox" launcher path).
+     *  When set, the run's `request` doubles as the sandbox purpose, so the worker
+     *  names the branch from it — no separate typing. Mutually exclusive with an
+     *  explicit `sandbox_id`. */
+    new_sandbox: z
+      .object({ level: z.enum(CREATABLE_LEVELS as [string, ...string[]]).default('worktree') })
+      .nullable()
+      .optional(),
+    requested_by: z.string().trim().min(1).max(120).nullable().optional(),
+  })
+  .superRefine((s, ctx) => {
+    if (s.new_sandbox && s.sandbox_id) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'cannot both attach to a sandbox and create a new one',
+        path: ['new_sandbox'],
+      });
+    }
+  });
 export type EnqueueSpec = z.infer<typeof EnqueueSpecSchema>;
 
 function nowIso(): string {
@@ -163,6 +187,12 @@ export class AtelierControl {
     if (!sbCols.some((c) => c.name === 'land_result')) {
       this.db.exec('ALTER TABLE sandboxes ADD COLUMN land_result TEXT');
     }
+    // Same for `purpose` (the human intent the worker names a branch from) over a
+    // sandboxes table made before it — the write-side mirror of tracer.py MIGRATIONS
+    // and sandboxes.py::ensure_schema. We INSERT into it.
+    if (!sbCols.some((c) => c.name === 'purpose')) {
+      this.db.exec('ALTER TABLE sandboxes ADD COLUMN purpose TEXT');
+    }
   }
 
   close(): void {
@@ -206,27 +236,86 @@ export class AtelierControl {
     return { id: Number(info.lastInsertRowid), adw_id: adwId };
   }
 
+  /** Create a FRESH sandbox and enqueue a run bound to it — the "＋ New sandbox"
+   *  launcher path — as ONE transaction, so a rejected enqueue never leaves an
+   *  orphan sandbox. The run's `request` doubles as the sandbox `purpose` (capped
+   *  to the purpose column's 500 chars), so the worker names the branch from the
+   *  same text (branch_namer, `adw/<id>` fallback) — the operator types nothing
+   *  extra. Same determinism spine: two INSERTs, the worker disposes.
+   *
+   *  No branch template is read here: a non-empty purpose (the request is required)
+   *  always defers naming to the worker (branch NULL), so a config-derived template
+   *  would never be interpolated — createSandbox's own default suffices. */
+  enqueueInNewSandbox(spec: EnqueueSpec): { id: number; adw_id: string; sandbox_id: string } {
+    const parsed = EnqueueSpecSchema.parse(spec);
+    if (!parsed.new_sandbox) {
+      throw new EnqueueError('enqueueInNewSandbox requires new_sandbox');
+    }
+    // Validate the ADW up front so we don't open a transaction we'll only roll back.
+    if (!readAdwNames(this.adwsDir).has(parsed.adw_name)) {
+      throw new EnqueueError(`unknown adw_name '${parsed.adw_name}' for this project`);
+    }
+    const level = parsed.new_sandbox.level;
+    const run = this.db.transaction(() => {
+      const { id: sandbox_id } = this.createSandbox({ level, purpose: parsed.request.slice(0, 500) });
+      const { id, adw_id } = this.enqueue({
+        adw_name: parsed.adw_name,
+        request: parsed.request,
+        agent: parsed.agent ?? null,
+        config: parsed.config ?? null,
+        sandbox_id,
+        requested_by: parsed.requested_by ?? null,
+      });
+      return { id, adw_id, sandbox_id };
+    });
+    return run();
+  }
+
   // ── sandboxes ──────────────────────────────────────────────────────────────
   // Same determinism spine as run_queue: create = INSERT a `requested` row; shut
   // down = flip `shutdown_requested`. The worker provisions the worktree and
   // disposes — the cockpit never spawns a process.
 
   private readonly SANDBOX_COLS =
-    `id, project_root, level, worktree_path, branch, ports, status, tip_sha,
+    `id, project_root, level, worktree_path, branch, purpose, ports, status, tip_sha,
      shutdown_requested, land_requested, land_result, error, created_at`;
 
-  /** INSERT a sandbox request; returns the id the worker will provision under. */
-  createSandbox(spec: CreateSandboxSpec): { id: string } {
+  /** INSERT a sandbox request; returns the id the worker will provision under.
+   *
+   *  Branch resolution: an explicit `spec.branch` (a schema-validated, literal
+   *  operator override) wins; otherwise the sandbox branches from `branchTemplate`
+   *  — the selected level's profile `branch` from config — with `${SANDBOX_ID}`
+   *  filled in with the freshly minted id. The template is trusted (it comes from
+   *  the project's own config, resolved by the route), but we re-validate the
+   *  interpolated result: it is spliced into the row the worker reads AND (via the
+   *  profile's ${BRANCH}) into shell setup/land commands, so a malformed or unsafe
+   *  template must fail loudly here rather than at `git worktree add`. */
+  createSandbox(
+    spec: CreateSandboxSpec,
+    branchTemplate = 'adw/${SANDBOX_ID}',
+  ): { id: string } {
     const parsed = CreateSandboxSpecSchema.parse(spec);
     const id = newAdwId(); // same 8-hex shape as an adw_id
-    const branch = parsed.branch ?? `adw/${id}`;
+    const purpose = parsed.purpose?.trim() || null;
+    // Branch precedence: an explicit override wins; else, when a purpose is given,
+    // defer to the worker (branch NULL now → branch_namer mints a readable slug at
+    // provision, adw/<id> fallback); else interpolate the level's template now.
+    const branch = parsed.branch
+      ? parsed.branch
+      : purpose
+        ? null
+        : branchTemplate.replaceAll('${SANDBOX_ID}', id);
+    if (branch != null) {
+      const branchErr = validateBranchName(branch);
+      if (branchErr) throw new EnqueueError(`sandbox branch — ${branchErr}`);
+    }
     this.db
       .prepare(
-        `INSERT INTO sandboxes (id, project_root, level, branch, status,
+        `INSERT INTO sandboxes (id, project_root, level, branch, purpose, status,
                                 shutdown_requested, created_at)
-         VALUES (?, ?, ?, ?, 'requested', 0, ?)`,
+         VALUES (?, ?, ?, ?, ?, 'requested', 0, ?)`,
       )
-      .run(id, this.projectRoot, parsed.level, branch, nowIso());
+      .run(id, this.projectRoot, parsed.level, branch, purpose, nowIso());
     return { id };
   }
 

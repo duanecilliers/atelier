@@ -52,7 +52,7 @@ roster read is scoped to that project's segment. The bare root `/` (`app/page.ts
 |---|---|---|---|---|
 | `/api/adws` | GET, POST | ADW builder HTTP face. GET returns the block catalog; POST generates a script (`preview:true` returns source only). **The one write surface that spawns a process** — shells out to `uv run engine/adws/make_adw.py`. | disk (via generator) | new `.py` file in `engine/adws/` (non-preview only) |
 | `/api/dashboard/stream` | GET | List-level SSE. `?watch=runs\|queue\|sandboxes`. Pushes `data: {sig}` only when the structural signature changes. Node runtime. Never auto-closes. | `db.sessions()` / `db.queue()` / `db.sandboxes()` every 300ms tick | none |
-| `/api/queue` | GET, POST | Control seam HTTP face. GET lists `run_queue`; POST enqueues a launch spec. Never spawns anything. | `getDb().queue()` | INSERT into `run_queue` via `getControl().enqueue()` |
+| `/api/queue` | GET, POST | Control seam HTTP face. GET lists `run_queue`; POST enqueues a launch spec — with `new_sandbox: {level}` it creates a sandbox and enqueues into it atomically (`enqueueInNewSandbox()`), else a plain `enqueue()`. Never spawns anything. | `getDb().queue()` | INSERT into `run_queue` (+ `sandboxes` for `new_sandbox`) via `getControl()` |
 | `/api/queue/[id]/cancel` | POST | Ask a run to stop — cancels an unclaimed row outright, else flips `cancel_requested`. | — | UPDATE `run_queue` via `getControl().requestCancel()` |
 | `/api/sandboxes` | POST | Sandbox control seam — INSERT a `requested` sandbox row (`getControl().createSandbox()`); the worker provisions the worktree. Never spawns anything. | — | INSERT into `sandboxes` |
 | `/api/sandboxes/[id]/land` | POST | Ask the worker to run the sandbox's `land` hook once — flips `land_requested` (only on an `active` sandbox; else 404). | — | UPDATE `sandboxes.land_requested` via `getControl().requestLand()` |
@@ -127,7 +127,10 @@ Any change to a table in `tracer.py` must be mirrored in both files — see the 
   dynamic on-disk allowlist; an optional `sandbox_id` binds the run to a sandbox and is rejected if
   that sandbox can't host it), `requestCancel()` flips `cancel_requested` unconditionally and, for a
   still-`queued` row, finishes it outright so no process is ever spawned; `createSandbox()` INSERTs
-  a `requested` sandbox row, and `requestLand()` / `requestShutdown()` flip a sandbox's
+  a `requested` sandbox row; `enqueueInNewSandbox()` does both in one transaction — creates a sandbox
+  (its `purpose` = the run's `request`, so the worker names the branch from it) **and** enqueues the
+  run bound to it, so the Conductor's "＋ new sandbox" launch is one round-trip with no orphan on a
+  rejected enqueue; and `requestLand()` / `requestShutdown()` flip a sandbox's
   `land_requested` / `shutdown_requested` flag. Every write is an INSERT or a flag flip — the worker
   disposes. `getControl()` memoizes a singleton the same way `getDb()` does. Never writes
   `sessions/phases/events/envelopes/gates/processes` — only the ADW subprocess itself, via the

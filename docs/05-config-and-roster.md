@@ -393,7 +393,8 @@ sandbox:
 
 | Field | Meaning |
 |---|---|
-| `default` | The level a launch uses when it doesn't pick one. Vocabulary is **bounded** (`local` · `worktree` · `worktree_env`; later `container` · `remote`) — a fixed seam enum shared with the cockpit (`roster-constants.ts`). `local` = no worktree, no sandbox row. *(Note: the create UI currently hardcodes `worktree` and doesn't yet read `default` — see the launcher caveat at the end of this section.)* |
+| `default` | The level the create UI **preselects**. Vocabulary is **bounded** (`local` · `worktree` · `worktree_env`; later `container` · `remote`) — a fixed seam enum shared with the cockpit (`roster-constants.ts`). `local` = no worktree, no sandbox row; because a sandbox row is always provisionable, a `default: local` preselects `worktree` in the picker. |
+| `namer` | How a sandbox's branch is named from its optional **`purpose`** (the free-text "what's this for?" on create). `namer.enabled` (default `true`) + `namer.model` (default `anthropic/claude-haiku-4-5`): when a create request carries a purpose and no explicit branch, the **worker** asks this cheap model — once, at provision — for a human-readable slug (`feat/api-rate-limiting` rather than `adw/<id>`), then slugifies, validates (git-ref + shell-safe), and dedupes it. Backend follows the model's provider prefix (`anthropic/*` → the local `claude` CLI, else `pi` — same auth as the coding agents, no API key). Disabled, no purpose, or any failure/offline → the deterministic `adw/<id>`; naming never blocks provisioning. |
 | `<level>:` | A profile block **keyed by level name** (`worktree_env` above). Declare one per non-`local` level the project uses. |
 | `branch` | The named branch the worktree checks out. It — and its commits — survive teardown in the shared `.git`; shutdown reclaims the working tree, not the work. Charset-validated (git-ref **and** shell-safe) because it interpolates into shell hooks. |
 | `setup` | Shell commands run once at create, `cwd` = the worktree. Warms deps so follow-up runs start instantly against the same tree. |
@@ -413,12 +414,15 @@ in `roster-constants.ts` (`SANDBOX_LEVELS`). Same discipline as the rest of the 
 the *level name* is shared seam vocabulary. Determinism is intact — provisioning changes only a
 run's `cwd` and env, so the argv the worker spawns is byte-identical to a `local` run.
 
-> **Launcher caveat (deferred).** `sandbox.default` and `profile.branch` are defined and validated
-> but **not yet consulted by the create path**: the cockpit's "+ New sandbox" hardcodes level
-> `worktree` (L1) and the engine mints `adw/<id>` as the branch. Reading `default`, a level picker,
-> and branch templating belong with the **new-vs-attach launcher** (a future slice). The
-> `worktree_env` engine path is complete — a sandbox whose `level` is set to it (a direct control
-> INSERT, or the future launcher) provisions the full profile.
+> **The create path reads this block.** "+ New sandbox" preselects `sandbox.default` (falling back
+> to `worktree` when it is `local` or names an undeclared level), and shows a level picker whenever
+> the project declares a `worktree_env` profile beside the always-available L1 `worktree`. It also
+> takes an optional **purpose** ("what's this sandbox for?"). Branch precedence: an explicit
+> operator `branch` override wins; else, with a purpose, the branch is left unset at create and the
+> **worker names it from the purpose** at provision (see `namer`, above); else the selected level's
+> `branch` template is minted at create with `${SANDBOX_ID}` interpolated. Config is the authority
+> on the template, resolved server-side in `/api/sandboxes` (a client never supplies it). An
+> un-configured project (no `sandbox:` block) keeps the single-button `worktree` UX unchanged.
 
 ---
 

@@ -6,6 +6,11 @@ import { useRouter } from 'next/navigation';
 import { AGENT_ROSTER, inferAdw, type AdwSpec } from '@/lib/adws';
 import { useProjectId } from '@/lib/use-project';
 import { projectHref, withProject } from '@/lib/project-url';
+import type { SandboxLaunchOption, ProvisionableSandboxLevel } from '@/lib/roster';
+
+// The Sandbox dropdown's sentinel for "spin up a fresh sandbox and run inside it".
+// Distinct from '' (local run) and from any real sandbox id (8 hex chars).
+const NEW_SANDBOX = '__new__';
 
 /**
  * The Conductor dock — the cockpit's launcher. Describe the work; Atelier infers
@@ -16,26 +21,37 @@ import { projectHref, withProject } from '@/lib/project-url';
  * `catalog` is built live from the ADWs on disk (see app/queue/page.tsx), so an
  * ADW composed in /skills shows up here without a code change. `sandboxes` are the
  * project's ACTIVE sandboxes — pick one to run the ADW inside its isolated worktree
- * (a serialized follow-up run); the default is a local run at REPO_ROOT.
+ * (a serialized follow-up run); the default is a local run at REPO_ROOT. Picking
+ * "＋ New sandbox" spins up a fresh sandbox AND runs inside it in one launch — the
+ * run's request also names its branch (worker-side), so there's nothing extra to type.
  */
 export type SandboxOption = { id: string; branch: string | null };
 
 export function QueueLauncher({
   catalog,
   sandboxes = [],
+  sandboxLevels = [],
+  defaultSandboxLevel = 'worktree',
 }: {
   catalog: AdwSpec[];
   sandboxes?: SandboxOption[];
+  /** The provisionable levels the "＋ New sandbox" option may create (from config). */
+  sandboxLevels?: SandboxLaunchOption[];
+  defaultSandboxLevel?: ProvisionableSandboxLevel;
 }) {
   const router = useRouter();
   const projectId = useProjectId();
   const [request, setRequest] = useState('');
   const [manualAdw, setManualAdw] = useState<string | null>(null);
   const [agent, setAgent] = useState<string>('scout');
-  const [sandboxId, setSandboxId] = useState<string>(''); // '' = local run
+  // '' = local run · NEW_SANDBOX = create+run · else an existing sandbox id.
+  const [sandboxId, setSandboxId] = useState<string>('');
+  const [newLevel, setNewLevel] = useState<ProvisionableSandboxLevel>(defaultSandboxLevel);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [launched, setLaunched] = useState<{ id: number; adw_id: string } | null>(null);
+  const [launched, setLaunched] = useState<{ id: number; adw_id: string; sandbox_id?: string } | null>(null);
+
+  const creatingSandbox = sandboxId === NEW_SANDBOX;
 
   // The inferred ADW follows the text until the operator overrides it. Fall back
   // to the first catalog entry if inference names an ADW not on disk.
@@ -57,17 +73,28 @@ export function QueueLauncher({
           adw_name: adwName,
           request: trimmed,
           agent: spec?.usesAgent ? agent : null,
-          sandbox_id: sandboxId || null,
+          // Create+run a fresh sandbox, attach to an existing one, or a local run.
+          new_sandbox: creatingSandbox ? { level: newLevel } : null,
+          sandbox_id: creatingSandbox ? null : sandboxId || null,
           requested_by: 'cockpit',
         }),
       });
-      const data = (await res.json()) as { id?: number; adw_id?: string; error?: string };
+      const data = (await res.json()) as {
+        id?: number;
+        adw_id?: string;
+        sandbox_id?: string;
+        error?: string;
+      };
       if (!res.ok || data.id == null || !data.adw_id) {
         throw new Error(data.error ?? `enqueue failed (${res.status})`);
       }
-      setLaunched({ id: data.id, adw_id: data.adw_id });
+      setLaunched({ id: data.id, adw_id: data.adw_id, sandbox_id: data.sandbox_id });
       setRequest('');
       setManualAdw(null);
+      // A just-created sandbox is one-shot: fall back to local so a second launch
+      // doesn't silently spin up another. Attaching to an existing one persists (a
+      // deliberate follow-up run in the same worktree).
+      if (creatingSandbox) setSandboxId('');
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -131,29 +158,71 @@ export function QueueLauncher({
             </Field>
           )}
 
-          {sandboxes.length > 0 && (
-            <Field label="Sandbox">
-              <select
-                value={sandboxId}
-                onChange={(e) => setSandboxId(e.target.value)}
-                className="min-w-[150px] border border-os-border bg-os-bg px-2 py-[7px] font-mono text-[12px] text-os-text outline-none focus:border-os-border-strong"
-                title="Run inside an isolated worktree (serialized), or locally at the repo root"
-              >
-                <option value="">local (repo root)</option>
-                {sandboxes.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.id}
-                    {s.branch ? ` · ${s.branch}` : ''}
-                  </option>
-                ))}
-              </select>
+          <Field label="Sandbox">
+            <select
+              value={sandboxId}
+              onChange={(e) => setSandboxId(e.target.value)}
+              className="min-w-[150px] border border-os-border bg-os-bg px-2 py-[7px] font-mono text-[12px] text-os-text outline-none focus:border-os-border-strong"
+              title="Run inside an isolated worktree (serialized), spin up a fresh one, or locally at the repo root"
+            >
+              <option value="">local (repo root)</option>
+              <option value={NEW_SANDBOX}>＋ new sandbox</option>
+              {sandboxes.length > 0 && (
+                <optgroup label="attach to active">
+                  {sandboxes.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.id}
+                      {s.branch ? ` · ${s.branch}` : ''}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
+          </Field>
+
+          {creatingSandbox && sandboxLevels.length > 1 && (
+            <Field label="Level">
+              <div className="flex items-center gap-px rounded-sm-t border border-os-border bg-os-border">
+                {sandboxLevels.map((l) => {
+                  const on = l.level === newLevel;
+                  return (
+                    <button
+                      key={l.level}
+                      type="button"
+                      onClick={() => setNewLevel(l.level)}
+                      aria-pressed={on}
+                      title={
+                        l.level === 'worktree'
+                          ? 'L1 — write isolation: a persistent branch workspace'
+                          : 'L2 — worktree + isolated deps, ports, services, env'
+                      }
+                      className={`px-2.5 py-[6px] font-mono text-[10.5px] font-bold uppercase tracking-[0.12em] transition-colors ${
+                        on
+                          ? 'bg-[var(--accent-soft)] text-os-accent'
+                          : 'bg-os-surface text-os-dim hover:text-os-muted'
+                      }`}
+                    >
+                      {l.level}
+                    </button>
+                  );
+                })}
+              </div>
             </Field>
           )}
 
           <div className="min-w-0 flex-1 self-center pt-4 font-mono text-[11px] text-os-dim">
-            {spec?.blurb}
-            {!manualAdw && request.trim() && (
-              <span className="ml-1.5 text-os-muted">· inferred</span>
+            {creatingSandbox ? (
+              <span>
+                runs in a fresh sandbox · its branch is named from your request (e.g.{' '}
+                <span className="text-os-muted">feat/…</span>)
+              </span>
+            ) : (
+              <>
+                {spec?.blurb}
+                {!manualAdw && request.trim() && (
+                  <span className="ml-1.5 text-os-muted">· inferred</span>
+                )}
+              </>
             )}
           </div>
 
@@ -176,7 +245,16 @@ export function QueueLauncher({
             Queued run{' '}
             <Link href={projectHref(projectId, `/runs/${launched.adw_id}`)} className="underline underline-offset-2">
               {launched.adw_id}
-            </Link>{' '}
+            </Link>
+            {launched.sandbox_id && (
+              <>
+                {' '}
+                in new sandbox{' '}
+                <Link href={projectHref(projectId, '/sandboxes')} className="underline underline-offset-2">
+                  ⬡ {launched.sandbox_id}
+                </Link>
+              </>
+            )}{' '}
             — the worker picks it up next. Start it with{' '}
             <code className="text-os-muted">just worker</code> if it isn&apos;t running.
           </p>

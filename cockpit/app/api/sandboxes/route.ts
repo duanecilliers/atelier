@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { ZodError } from 'zod';
 import { getDb } from '@/lib/data';
 import { getControl, CreateSandboxSpecSchema } from '@/lib/control';
+import { pathsForProject } from '@/lib/projects';
+import { projectSandboxBranchTemplate } from '@/lib/roster';
 
 // The sandbox control seam's HTTP face. GET lists sandboxes; POST requests a new
 // one (status `requested`) for the worker to provision. Both scope to ?project=<id>.
@@ -29,7 +31,8 @@ export async function POST(req: NextRequest) {
   }
   try {
     const spec = CreateSandboxSpecSchema.parse(body ?? {});
-    const { id } = getControl(projectId).createSandbox(spec);
+    const branchTemplate = projectSandboxBranchTemplate(pathsForProject(projectId).configPath, spec.level);
+    const { id } = getControl(projectId).createSandbox(spec, branchTemplate);
     return NextResponse.json({ id }, { status: 201 });
   } catch (e) {
     if (e instanceof ZodError) {
