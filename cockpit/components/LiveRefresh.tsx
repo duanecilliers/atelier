@@ -21,7 +21,13 @@ import { withProject } from '@/lib/project-url';
  * signature, so a change missed while disconnected still triggers one refresh).
  * Matches the per-run tail's tradeoff — fine for the local single-user cockpit.
  */
-export function LiveRefresh({ watch, initialSig }: { watch: 'runs' | 'queue'; initialSig: string }) {
+export function LiveRefresh({
+  watch,
+  initialSig,
+}: {
+  watch: 'runs' | 'queue' | 'sandboxes';
+  initialSig: string;
+}) {
   const router = useRouter();
   const projectId = useProjectId();
   const lastSig = useRef(initialSig);

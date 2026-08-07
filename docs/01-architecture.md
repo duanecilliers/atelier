@@ -91,7 +91,7 @@ There are exactly three places anything gets written, and they are kept apart on
 | Surface | Writer | Target | Guard |
 | --- | --- | --- | --- |
 | The **trace** | the ADW subprocess, via `tracer.py` | `sssf.db` (sessions/phases/events/…) | only the run writes its own trace |
-| The **control plane** | the cockpit, via `lib/control.ts` | `sssf.db` — **only** the `run_queue` table | a separate read-write connection; enqueue + cancel, nothing else |
+| The **control plane** | the cockpit, via `lib/control.ts` | `sssf.db` — **only** the `run_queue` and `sandboxes` tables | a separate read-write connection; enqueue + cancel a run, create + land + shut down a sandbox — INSERTs and flag flips, never a spawn |
 | The **roster config** | the cockpit, via `lib/roster.ts` | the **file** `sssf.config.yaml` (not the db) | surgical byte-range splice, atomic write; the engine re-validates via Pydantic at run time |
 
 The read path (`lib/db.ts`) is a fourth, separate, **readonly** connection, kept apart from the
@@ -104,7 +104,7 @@ stay in lockstep. Only the first is machine-checked.
 
 | Mirror | Python source | TypeScript mirror | Checked by |
 | --- | --- | --- | --- |
-| Trace schema | `adw_modules/tracer.py` (`SCHEMA` + `MIGRATIONS`, plus `queue.py`'s `RUN_QUEUE_DDL`) | `cockpit/lib/types.ts` + `cockpit/lib/schemas.ts` (`TABLE_COLUMNS`) | **`pnpm check:contract`** |
+| Trace schema | `adw_modules/tracer.py` (`SCHEMA` + `MIGRATIONS`, plus `queue.py`'s `RUN_QUEUE_DDL` and `sandboxes.py`'s `SANDBOXES_DDL`) | `cockpit/lib/types.ts` + `cockpit/lib/schemas.ts` (`TABLE_COLUMNS`) | **`pnpm check:contract`** |
 | Roster config | `adw_modules/data_types.py` (`SSSFConfig`/`AgentConfig`/`ConfigDefaults`) | `cockpit/lib/roster.ts` (Zod) | by hand (it's a file, not a db table) |
 | ADW block catalog | `make_adw.py`'s block catalog | — (read live via `--list-steps --json`) | no static mirror — the generator is the source |
 

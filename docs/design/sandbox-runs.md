@@ -1,122 +1,277 @@
 # Design note — Sandbox / isolated runs
 
-> **Status: PROPOSED — not yet implemented.** This is the last open Phase 5 item
-> ("Sandbox / cloud runs — push 80% of junk work to sandboxes", see
-> [`atelier-plan.html`](../atelier-plan.html)). This note captures the design decided so far so a
-> future session can pick it up without re-deriving it. Nothing here is built; no branch or PR
-> exists for it. When it lands, fold the relevant parts into the numbered guides and drop the
-> status note in [`docs/README.md`](../README.md).
+> **Status: IMPLEMENTED (Phase 5), on `feat/sandbox-runs`.** The design below shipped across four
+> slices — L1 lifecycle, L2 provisioning (ports/setup/env), L3 backing services, L4 landing
+> workflows. `SSSF_TRACE_ROOT`, the `sandboxes` table, `run_queue.sandbox_id`, the `sandbox:` config
+> block, and the worktree wiring all exist. This note is retained as the **design rationale**; the
+> operating reference now lives in the numbered guides — [`07-operations.md`](../07-operations.md#5-sandboxes--isolated-persistent-workspaces)
+> (worker reconcile/reap), [`05-config-and-roster.md`](../05-config-and-roster.md#8-the-sandbox-block--isolated-workspaces)
+> (the `sandbox:` block), and [`08-extending-the-system.md`](../08-extending-the-system.md#the-sandbox-feature-is-the-worked-example)
+> (Recipe E as the worked seam change). One follow-on remains deferred: the **new-vs-attach
+> launcher** (a level picker + reading `sandbox.default` / templating `profile.branch`) — see
+> [§ Open questions](#open-questions-settled-during-build), reconciled below.
+>
+> **History.** (1) Originally scoped to L1 ephemeral parallel-write isolation for the "80% junk work."
+> (2) Revisited 2026-08-06: the real need is **L2 (env + services) isolation for actual feature
+> work**, per project. (3) Refined further: a sandbox is a **persistent** workspace that hosts
+> follow-up work until explicitly shut down, and **landing** the work (PR vs direct merge) is a
+> per-project workflow. This note reflects (3).
 
 ## Goal
 
-Run each ADW in **write-isolation** so multiple runs can be in flight without clobbering each
-other's working tree. Today the worker runs every ADW with `cwd=REPO_ROOT`, so `--concurrency > 1`
-means parallel runs share one tree and can collide on writes. The win we're buying is **parallel
-isolation**, not security containment and not off-machine offload.
+Give each unit of work an **isolated, persistent environment** — its own working tree (on a branch),
+dependencies, ports, backing services, and env — that **hosts one or more ADW runs** and **stays
+alive for follow-up work until explicitly shut down**. Landing the result (open a PR, merge directly,
+or leave it) is a **per-project workflow**. Today the worker runs every ADW with `cwd=REPO_ROOT`, so
+`--concurrency > 1` shares one tree, one `node_modules`, and one set of ports.
 
-## Chosen shape (decisions locked)
+**Not** in scope: security/blast-radius containment (L3) and off-machine offload (L4) — see
+[§ The isolation ladder](#the-isolation-ladder). We stop at a **hybrid** sandbox: the ADW *process*
+stays local (so the local `claude`/`pi` login and process-group cancel keep working untouched),
+while its *tree, deps, ports, services, and env* are isolated per sandbox.
+
+## The isolation ladder
+
+| Level | Buys | Cost | Status |
+| --- | --- | --- | --- |
+| **L0** shared tree *(today)* | nothing — runs collide at `--concurrency > 1` | none | current |
+| **L1** git **worktree** sandbox | write isolation; a persistent branch workspace | tiny | **foundation slice** |
+| **L2** sandbox **+ env + services** | above **+** isolated deps, per-sandbox ports, backing services, scoped env | medium | **the target** |
+| **L3** container | above **+** OS / blast-radius containment | heavy | out of scope (future) |
+| **L4** remote sandbox | off-machine offload | highest | **blocked** — local login can't travel; only viable for API-key-auth projects (future) |
+
+## Chosen shape — decisions locked
 
 | Axis | Decision | Why |
 | --- | --- | --- |
-| Isolation mechanism | **Local git worktree** per run (`git worktree add --detach .sandboxes/<adw_id> HEAD`) | Preserves the determinism spine (the worker still builds the same argv; only `cwd` changes), auth is trivial (same machine), and it's fully verifiable by kicking a real run. |
-| Primary goal | **Parallel-write isolation** | Each run owns its filesystem, so `--concurrency > 1` becomes genuinely safe. |
-| PR scope | **Engine + cockpit surface** | Worker gains the mode; a `run_queue.target` column carries the choice across the seam; the cockpit lets you pick a target at launch and shows it. |
+| Target level | **L2 hybrid** (worktree + env + services), built on the **L1** worktree foundation | The real cross-project need is running full-stack work in isolation. |
+| Unit of isolation | A **persistent sandbox** = a worktree on a **named branch**, a first-class entity with its own lifecycle (create → host runs → land → shut down) | Real feature work is iterative: you run, inspect, run again in the same env. The sandbox outlives any single run. |
+| Concurrency | **Across sandboxes, not within one.** Runs in the *same* sandbox **serialize** | Two runs in one tree would re-introduce the write collision we're isolating away. Parallelism = multiple sandboxes. |
+| Isolation mechanism | **Local git worktree** + per-sandbox **provisioning** (deps, ports, services, env), all bound to sandbox **create/shutdown** (not per run) | Determinism spine intact (same argv; only `cwd` + env change); follow-up runs are fast (env stays warm); auth trivial. |
+| Where configured | **Per-project sandbox profile** in `sssf.config.yaml`, **default + per-run override** | "Projects differ" lives in config: each project declares its level, how to provision, and how to land. |
+| Services | **Project-declared `up`/`down` hooks**, engine injects an allocated port block as env | Engine mechanism-agnostic — a hook wraps `docker compose` / testcontainers / anything. **No hard Docker dependency.** |
+| Landing | **Per-project `land` workflow** — declared `pr` / `merge` / `manual` hook, invoked explicitly. Sandbox always records its **branch + tip SHA** while alive | Some projects open PRs, others merge directly, others merge by hand. Nothing lands or is destroyed implicitly. |
+| Lifecycle | Torn down **only on explicit shutdown** (a control-plane flag); the worker disposes (services down + worktree remove) | The whole point of persistence: no surprise teardown while you may still want the tree. |
+| Surface | **Engine + cockpit** | Worker gains sandbox reconciliation; a `sandboxes` table + `run_queue.sandbox_id` carry it across the seam; the cockpit creates / attaches / lands / shuts down and shows sandboxes. |
 
 ### Alternatives rejected
+- **Ephemeral per-run worktree** (the original L1 shape) — torn down on run completion. Rejected:
+  kills follow-up work and forces re-provisioning every run. Superseded by the persistent sandbox.
+- **Docker container for the ADW itself (L3)** — real containment, but heavy and process-group
+  cancel goes indirect. Distinct from L2 services, which keep the **agent** local and only
+  containerize **backing services** via the project's own `up` hook.
+- **Remote cloud sandboxes (L4)** — **blocked on this machine**: the local `claude`/`pi` login can't
+  travel, so runs couldn't authenticate or be verified by kicking a real ADW. Reopens only for a
+  project on **API-key** auth. See the machine gotcha in [Architecture](../01-architecture.md).
 
-- **Local Docker containers** — real OS/blast-radius isolation, but heavy (an image with `uv` +
-  `claude` + `pi`, mounting the local `claude` login in) and the process-group cancel gets
-  indirect. Overkill for the parallel-isolation goal.
-- **Remote cloud sandboxes** — largest surface, and **blocked on this machine**: the local
-  `claude` CLI login / pi OAuth can't travel to a remote sandbox, so runs couldn't authenticate
-  and couldn't be verified by kicking a real ADW (the repo's only acceptance gate). Would ship
-  un-verifiable. See the machine gotcha in [Architecture](../01-architecture.md).
+### Evaluated: treehouse for worktree orchestration (spike 2026-08-06)
 
-## The key architectural insight
+[treehouse](https://github.com/kunchenguid/treehouse) (Go, MIT) manages a pool of reusable,
+pre-warmed worktrees with durable leases. Spiked v2.0.0 against this repo's cockpit. Findings:
+
+- **What fits.** Durable lease (`get --lease --lease-holder <id>`) maps cleanly onto a persistent
+  sandbox: an outside-repo worktree held with no process, in a small tidy state file. A commit on a
+  named branch **survives `return`/destroy** because the worktree shares the **main repo's `.git`**
+  (`git-common-dir` → the real `.git`) — validating our named-branch merge-back.
+- **The catch.** That branch survival and the correct `show-toplevel` in an outside-repo worktree are
+  **inherent to `git worktree`**, not treehouse's value-add. treehouse's actual value-add is *pool +
+  warm reuse across churn*, and it's **smaller than advertised** for us: measured `pnpm install` was
+  1.7s cold vs 0.24s warm — pnpm's global content-addressed store already makes cold cheap. The pool
+  edge is real only for **build caches** (`.next`, native builds) **across sandbox teardown/recreate**
+  — but our **persistent sandbox already keeps caches warm within its life**, so the benefit only
+  lands under high create/destroy churn.
+- **Costs.** A new external binary on every worker host (incl. stamped repos); a second source of
+  truth (its `state.json` vs our `sandboxes` table); and young automation flags (`--json`,
+  `return --if-lease-id` are newer than the v2.0.0 in use — even latest is v2.1.1).
+
+**Decision (leaning, pending confirm): worktree provider is an internal abstraction.** Slice 1 ships
+a native `git worktree` provider (zero deps, fully verifiable); treehouse is an **opt-in** provider
+(`sandbox.provider: git | treehouse`) for setups with real sandbox churn. Nothing else in the design
+changes — the provider only supplies `acquire(sandbox_id) → path` / `release` / `list`.
+
+## The key architectural insight (the one correctness fix)
 
 If a run's `cwd` becomes a worktree, the codebase splits cleanly into two concerns — and only one
-of them needs a fix:
+needs a fix:
 
 | Concern | Resolves via | Under a worktree cwd | Action |
 | --- | --- | --- | --- |
 | **Execution surface** — agent cwd, write-boundary diff, commit, `protected_files` | `repo_root()` = `git rev-parse --show-toplevel`, which **inside a worktree returns the worktree** | Correct — this is exactly the isolation we want | **None** |
 | **Observability sink** — the shared `sssf.db`, the JSONL trace, `data_dir`/session dirs | resolved **relative to `cwd`** (relative path strings from config) | Would silently move **into** the worktree → the cockpit sees nothing | **The one correctness fix** |
 
-So the design is: the worker creates a worktree, spawns the ADW with `cwd=worktree` **and** tells
-it the shared trace root; the observability paths absolutize against that root. Non-sandboxed
-runs (CLI, or `target=local`) leave the signal unset → everything resolves against `cwd` as today
-→ **byte-identical behavior**.
+So: the worker spawns the ADW with `cwd=<sandbox worktree>` **and** tells it the shared trace root;
+observability paths absolutize against that root. Non-sandboxed runs (`sandbox_id` null) leave the
+signal unset → everything resolves against `cwd` as today → **byte-identical behavior**.
 
-## Implementation plan
+## Multi-project — where the trace root comes from
 
-### 1. Engine — observability resolves against a shared trace root (the correctness fix)
-- `adw_modules/utils.py` — add `trace_root()` → `Path(os.environ.get("SSSF_TRACE_ROOT") or Path.cwd())`
-  and `resolve_trace_path(p)` (absolutize a relative path against `trace_root()`).
-- `session.py::ensure` — wrap the two `Tracer(...)` paths (db + events JSONL) with `resolve_trace_path`.
-- `runner.py::Run.__init__` — wrap `session_dir` (the context-handoff dir and `agent_map.json`
-  hang off it, so they follow).
-- **No-op when `SSSF_TRACE_ROOT` is unset.** `cfg.defaults.data_dir` stays a relative string, so
-  the `permissions` write-boundary / `always_writable` derivation is untouched (see
-  [Agents & the write boundary](../03-agents-and-gates.md)).
+The distribution track added a **supervisor** (`adw_worker.py::supervise` / `_spawn_worker`): one
+**worker** per `workerDesired` project, each spawned with `cwd=entry.root`. That is a new spawn site —
+but **not** a second *ADW* spawn site. The supervisor spawns *workers*; each worker still spawns ADWs
+through the single `spawn()` (`adw_worker.py:150`, `cwd=REPO_ROOT`), and now also **reconciles its
+project's sandboxes**. The worktree/provisioning logic lives in the worker and nowhere else —
+`_spawn_worker` needs **no** change.
 
-### 2. Engine — worker gains a worktree execution mode (`adw_worker.py`)
-- Read `row["target"]` (add `target` to `_CLAIM_COLS` in `queue.py`).
-- `target == 'worktree'`: `git worktree add --detach .sandboxes/<adw_id> HEAD` → spawn with
-  `cwd=<worktree>`, `env` adding `SSSF_TRACE_ROOT=<repo_root>`, and absolutize `--config` to the
-  **real** repo config (so the sandbox reads live roster, not the worktree's HEAD copy). Store the
-  path on the `Job`.
-- Teardown: `git worktree remove --force <path>` on terminal reap **and** on cancel-complete.
-  On startup, best-effort reap of stale `.sandboxes/*` worktrees from a crashed prior worker.
-- `target == 'local'` (default): **unchanged** — today's exact behavior.
-- Add `.sandboxes/` to `.gitignore`.
+It composes because `REPO_ROOT = git_helper.repo_root()` is resolved **per worker process at import**
+(`adw_worker.py:47`), so a supervised worker already sits at *that project's* root. `SSSF_TRACE_ROOT`
+= the worker's own `REPO_ROOT`, uniformly across standalone and supervised modes. Rule for the
+implementer: never capture a single global "atelier root."
 
-### 3. Seam — new `run_queue.target` column (this is a seam change — follow the checklist)
-Add `target TEXT DEFAULT 'local'` and mirror it everywhere. This is exactly
+## The sandbox as a first-class entity
+
+A **sandbox** outlives the runs it hosts. Its lifecycle, and where each step's config comes from:
+
+```
+ request ──▶ PROVISIONING ──▶ ACTIVE ⇄ (run, run, run…) ──▶ LANDING ──▶ SHUTTING_DOWN ──▶ gone
+             worktree add       host serialized runs        land hook     services.down
+             ports + setup      (follow-up work)            (pr|merge)     worktree remove
+             services.up
+```
+
+- **Create** (control-plane INSERT a `sandboxes` row): worker provisions — `git worktree add` on a
+  named branch, allocate ports, run `setup`, `services.up`. Status `active`.
+- **Use**: one or more runs execute with `cwd=<worktree>`; runs targeting the same sandbox
+  **serialize** (the worker won't spawn a second run into an `active`-but-busy sandbox).
+- **Land** (explicit): run the project's `land` hook (open a PR / merge / manual). Does **not**
+  destroy the sandbox.
+- **Shut down** (explicit control-plane flag): worker runs `services.down`, removes the worktree,
+  marks the row `gone`. The **only** thing that tears a sandbox down.
+
+Provisioning and services are **per sandbox** (at create/shutdown), not per run — so follow-up runs
+start instantly against a warm env.
+
+## The sandbox profile (per-project config)
+
+Each project declares, in `sssf.config.yaml`, a `sandbox` section: a `default` level, a named profile
+per non-trivial level, and a `land` workflow.
+
+```yaml
+sandbox:
+  default: local                 # byte-identical to today unless a run overrides
+  worktree_env:                  # the L2 profile for this project
+    branch: adw/${SANDBOX_ID}     # named branch for the worktree (overridable at launch)
+    setup: [pnpm install --frozen-lockfile]   # run once at sandbox create
+    ports: { WEB: auto, DB: auto }            # engine allocates a free port for each → env vars
+    services:
+      up:   docker compose -p ${SANDBOX_ID} up -d
+      down: docker compose -p ${SANDBOX_ID} down -v
+    env:
+      DATABASE_URL: postgres://localhost:${DB}/app   # ${DB}, ${WEB}, ${SANDBOX_ID} interpolated
+    land:
+      mode: pr                    # pr | merge | manual
+      cmd:  gh pr create --fill --head ${BRANCH}   # for mode: merge → e.g. a merge-to-main hook
+```
+
+- **Level vocabulary is bounded** (`local` · `worktree` · `worktree_env`; later `container` ·
+  `remote`) so `run_queue.target` / the sandbox level stays a fixed seam enum. *Provisioning* and
+  *landing* are per-project; the *level name* is shared vocabulary (`roster-constants.ts`).
+- **Interpolation** — `${SANDBOX_ID}`, `${BRANCH}`, and each allocated port name (`${WEB}`, `${DB}`)
+  are available to `setup`, `services`, `env`, and `land`. Allocated ports + the profile `env` are
+  injected into every run's process env, so the agent/app read the same ports the services bound to.
+
+## Seam changes (Recipe E discipline)
+
+Two new pieces, mirrored Python↔TS per
 [Extending → Recipe E](../08-extending-the-system.md#recipe-e--add-a-column-to-a-trace-table-or-run_queue):
-- `queue.py` `RUN_QUEUE_DDL`; `tracer.py` `MIGRATIONS` (`("run_queue","target","TEXT DEFAULT 'local'")`).
-- `cockpit/lib/control.ts` — DDL mirror, `EnqueueSpecSchema` (`target: z.enum(['local','worktree']).optional()`),
-  the `enqueue()` INSERT, the `get()` SELECT.
-- `cockpit/lib/schemas.ts` (`RunQueueRowSchema`) + `cockpit/lib/types.ts` (`RunQueueRow.target` + a `RunTarget` union).
-- `cockpit/scripts/check-contract.ts` — add `run_queue: new Set(['target'])` to `MIGRATION_COLUMNS`.
-- `cockpit/lib/db.ts` `queue()` — select via the existing `optionalColumn('run_queue','target')` helper.
 
-### 4. Cockpit — surface it
-- `QueueLauncher.tsx` — a Target selector (Local / Worktree) with a one-line blurb; POST includes `target`.
-- `queue/page.tsx` `QueueCard` — a small "worktree" chip when `target === 'worktree'`.
-- Run-detail badge — a lightweight readonly `db.queueRowForAdw(adwId)` lookup + chip (adds one
-  `AtelierDb` method → **restart `pnpm dev`** afterward, memoized connection).
+- **New `sandboxes` table** — `id`, `project_root`, `level`, `worktree_path`, `branch`, `ports` (JSON),
+  `status` (`requested|provisioning|active|landing|shutting_down|gone|failed`), `tip_sha`,
+  `shutdown_requested`, `created_at`. Mirror in `tracer.py` `SCHEMA`/`MIGRATIONS`, `cockpit/lib/types.ts`,
+  `cockpit/lib/schemas.ts` + `TABLE_COLUMNS`, `check-contract.ts`.
+- **`run_queue.sandbox_id`** (nullable TEXT) — binds a run to a sandbox; null = today's local run.
+  Mirror in `queue.py` DDL, `tracer.py` MIGRATIONS, `control.ts` (DDL + `EnqueueSpecSchema` +
+  INSERT/SELECT), `schemas.ts`, `types.ts`, `check-contract.ts` `MIGRATION_COLUMNS`, `db.ts::queue()`.
+- **Config seam** — `SSSFConfig.sandbox` in `data_types.py` (Pydantic), mirrored by hand in
+  `cockpit/lib/roster.ts` (Zod), with the level vocabulary in `roster-constants.ts`.
 
-## Scoped boundary (call this out when it ships)
+**Control-plane invariant preserved.** Create sandbox = INSERT a `sandboxes` row (status
+`requested`); land / shut down = set a column (`land_requested` / `shutdown_requested`). The **worker**
+reconciles and disposes — the cockpit still **never spawns a process** and never mutates a trace.
 
-Sandboxed runs **isolate the working tree; they do not merge committed results back** — the
-worktree is torn down on completion, so a commit on its detached HEAD becomes unreachable
-(recoverable via reflog until GC). Merge-back is a **future slice**. This matches the goal:
-isolation for the "80% junk work" (scout / prompt / read-only), which is exactly what benefits.
-Optional cheap safety to consider: record the tip SHA in `run_queue` before teardown so committed
-work is at least findable.
+## Implementation plan (sliced so the foundation lands first)
 
-## Open questions to settle on revisit
+### Slice 1 — sandbox lifecycle skeleton (L1)
+Persistent worktree sandboxes you can run ADWs in and shut down. No provisioning, no services, no
+land hook (branch left for manual merge).
+1. **Trace-root fix** (`adw_modules/`): `trace_root()` → `Path(os.environ.get("SSSF_TRACE_ROOT") or
+   Path.cwd())` + `resolve_trace_path()` in `utils.py`; wrap the two `Tracer(...)` paths in
+   `session.py::ensure` and `session_dir` in `runner.py::Run.__init__`. **No-op when unset.**
+2. **Seam**: `sandboxes` table + `run_queue.sandbox_id` (above).
+3. **Worker sandbox reconciliation** (`adw_worker.py`): provision `requested` sandboxes (worktree add
+   on a named branch); spawn runs with `cwd=<worktree>` + `SSSF_TRACE_ROOT=REPO_ROOT`, absolutizing
+   `--config` to the **real** repo config; **serialize** runs per sandbox; tear down on
+   `shutdown_requested`; record `tip_sha`. Startup reap of stale worktrees (`git worktree prune`).
+4. **Cockpit**: create / attach-run-to / shut-down a sandbox; a sandbox list + per-run sandbox chip.
 
-- **Env var name** — `SSSF_TRACE_ROOT` is the working name; confirm or pick another.
-- **Default target** — row default `'local'` (byte-identical to today), worktree opt-in per run.
-  Do we also want a config-level default? Probably not for the first slice.
-- **Committed-work recoverability** — record the tip SHA before teardown, or accept reflog-only?
-- **Run-detail badge scope** — worth the extra `AtelierDb` method, or keep the badge on the queue
-  card only (where `run_queue` data already is)?
-- **Stale-worktree reaping** — on worker startup only, or also periodically?
+### Slice 2 — provisioning (deps + ports + env)
+5. **Config seam** — the sandbox profile (`SSSFConfig.sandbox`, roster mirror, level vocab).
+6. **Provision at create**: allocate ports, run `setup`, inject ports + interpolated `env` into runs.
+
+### Slice 3 — backing services
+7. **Service hooks**: `services.up` at create, `services.down` at shutdown; startup orphan reaping
+   (the `-p ${SANDBOX_ID}` naming makes `down` targetable).
+
+### Slice 4 — landing workflows
+8. **`land` hook**: a control-plane `land_requested` flag → worker runs the project's `land` hook
+   (`pr` / `merge` / `manual`); cockpit "Land" action showing the resulting PR/merge. Sandbox stays
+   until separately shut down.
+
+## Open questions (settled during build)
+
+Every question below was resolved during implementation; the one genuine remainder is the
+new-vs-attach launcher, deferred to a future slice.
+
+- **Worktree location** — **SETTLED: outside the repo** (`~/.atelier/worktrees/<project>/<sandbox-id>`).
+  No project `.gitignore` change, `show-toplevel` still resolves inside it.
+- **Serialization** — **SETTLED: queue behind the first.** A run bound to a busy sandbox is simply
+  not claimed this poll (`queue.claim_next(active − busy)`) and waits in the queue — no reject, no
+  second tree. Parallelism is across sandboxes.
+- **Port allocation** — **SETTLED: probe a free port at provision time**, persisted as JSON on the
+  row and re-read into each run's env (mildly TOCTOU-racy, accepted for simplicity).
+- **Service-failure handling** — **SETTLED.** A failing `services.up` marks the sandbox `failed`,
+  spawns no runs, and brings any partially-started services back down (targetable via
+  `-p ${SANDBOX_ID}`) before removing the tree; `services.down` always runs on shutdown, first,
+  best-effort (a wedged service can't leak the worktree).
+- **Stale reaping cadence** — **SETTLED: worker startup.** One worker owns its project's sandboxes
+  exclusively, so any transient-state row at startup is a dead predecessor's; `provisioning`→`failed`,
+  `shutting_down`→`gone`, `landing`→`active` (non-destructive). No periodic sweep needed.
+- **Service-failure / landing precedence** *(surfaced during build)* — **SETTLED: shutdown wins.** A
+  sandbox flagged for both land and shutdown shuts down (the stronger intent); land runs *after*
+  teardown in the reconcile pass, and `shutdown_pending` flips it out of `active` so `land_pending`
+  (active-only) skips it.
+- **Shutdown safety (un-landed commits)** — **RESOLVED by design, not a guard.** Shutdown removes
+  the working *tree* but the named branch and its commits survive in the shared `.git`, so there is
+  no data-loss cliff to warn about; landing is a separate, non-destructive action. A "you have
+  un-landed commits" advisory could still be added to the shutdown button later, but nothing is lost
+  without it.
+- **New vs attach** — **DEFERRED (the one remaining follow-on).** The launcher is still "create
+  requests an L1 `worktree`; attach a run by picking an active sandbox's *run here →*". A real
+  new-vs-attach launcher — a level picker, reading `sandbox.default`, and templating
+  `profile.branch` — is future work; `sandbox.default` and `profile.branch` are defined and
+  validated but not yet consulted by the create path.
 
 ## Verification plan
 
-1. `cd cockpit && pnpm typecheck && pnpm check:contract && pnpm build` (contract now covers `target`).
-2. Enqueue two `target=worktree` runs, `just worker --concurrency 2`; confirm each gets its own
-   `.sandboxes/<adw_id>`, **both traces land in the shared `sssf.db`**, worktrees are removed on
-   completion, and cancel tears down cleanly.
-3. Confirm a `target=local` run is byte-identical to today (no `SSSF_TRACE_ROOT`, no worktree).
-4. `/code-review high` on the diff before landing.
+1. `cd cockpit && pnpm typecheck && pnpm check:contract && pnpm build` (contract covers the new table
+   + `sandbox_id`).
+2. **Slice 1** — create a sandbox; run two ADWs **into the same sandbox** sequentially, confirm they
+   share the tree, **both traces land in the shared `sssf.db`**, `tip_sha` updates, and the worktree
+   persists across runs. Create a **second** sandbox and run concurrently — confirm the two don't
+   collide. Shut down → worktree removed. A null-`sandbox_id` run is byte-identical to today.
+3. **Supervised mode** — a sandbox run under `--supervise` for a *stamped* project: trace lands in
+   that project's own `sssf.db`, no stray worktree left behind.
+4. **Slice 2/3** — a `worktree_env` sandbox on a real full-stack project: deps install once at create,
+   allocated ports don't collide with a second sandbox, `services.up`/`down` bracket the sandbox
+   lifecycle (not each run), and the app under the agent reaches its per-sandbox DB via the injected
+   `DATABASE_URL`.
+5. **Slice 4** — a `land` hook opens a PR (mode `pr`) / merges (mode `merge`); the sandbox survives
+   landing and is removed only on explicit shutdown.
+6. `/code-review high` on each slice's diff before landing.
 
 ## References
 
 - [Architecture](../01-architecture.md) — the determinism spine and the seam this must preserve.
 - [Operations](../07-operations.md) — the worker & `run_queue` lifecycle this extends.
+- [Config & roster](../05-config-and-roster.md) — where the sandbox profile lives.
 - [Extending the system](../08-extending-the-system.md) — Recipe E (the seam-change checklist).
 - [`AGENTS.md`](../../AGENTS.md) — the canonical contract.

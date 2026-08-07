@@ -21,8 +21,10 @@ import { existsSync } from 'node:fs';
 import { z } from 'zod';
 import { readAdwNames } from './skills';
 import { pathsForProject } from './projects';
-import { RunQueueRowSchema } from './schemas';
-import type { QueueStatus, RunQueueRow } from './types';
+import { RunQueueRowSchema, SandboxRowSchema } from './schemas';
+import { SANDBOX_LEVELS, validateBranchName } from './roster-constants';
+import { TERMINAL_SANDBOX_STATUSES } from './types';
+import type { QueueStatus, RunQueueRow, Sandbox, SandboxStatus } from './types';
 
 /** A rejected enqueue the route maps to 400 (e.g. an adw_name not on disk for
  *  this project). Distinct from a 5xx so a bad spec reads as user error. */
@@ -38,6 +40,7 @@ CREATE TABLE IF NOT EXISTS run_queue (
   agent         TEXT,
   request       TEXT,
   config        TEXT,
+  sandbox_id    TEXT,
   status        TEXT DEFAULT 'queued',
   requested_by  TEXT,
   cancel_requested INTEGER DEFAULT 0,
@@ -50,6 +53,50 @@ CREATE TABLE IF NOT EXISTS run_queue (
   ended_at      TEXT
 );`;
 
+// Mirrors engine/adws/adw_modules/sandboxes.py::SANDBOXES_DDL. The cockpit owns
+// the write side (INSERT a `requested` row; flip `shutdown_requested`), so it may
+// create the table — the worker fills every engine column. Kept in sync by hand.
+const SANDBOXES_DDL = `
+CREATE TABLE IF NOT EXISTS sandboxes (
+  id                 TEXT PRIMARY KEY,
+  project_root       TEXT,
+  level              TEXT,
+  worktree_path      TEXT,
+  branch             TEXT,
+  ports              TEXT,
+  status             TEXT DEFAULT 'requested',
+  tip_sha            TEXT,
+  shutdown_requested INTEGER DEFAULT 0,
+  land_requested     INTEGER DEFAULT 0,
+  land_result        TEXT,
+  error              TEXT,
+  created_at         TEXT
+);`;
+
+// A sandbox is created at a provisionable level — `local` is the no-sandbox
+// default (a run at REPO_ROOT), never a row here. Slice 1 provisions `worktree`;
+// `worktree_env` is accepted so the seam is ready for slices 2–3.
+const CREATABLE_LEVELS = SANDBOX_LEVELS.filter((l) => l !== 'local');
+
+/** The validated shape a caller may create a sandbox with. `branch` defaults to
+ *  `adw/<id>` when omitted. It is validated to a git-refname- AND shell-safe
+ *  charset because the worker interpolates ${BRANCH} into shell setup/land
+ *  commands — a git-legal name with a `;`/`$`/backtick would otherwise inject. */
+export const CreateSandboxSpecSchema = z.object({
+  level: z.enum(CREATABLE_LEVELS as [string, ...string[]]).default('worktree'),
+  branch: z
+    .string()
+    .trim()
+    .nullable()
+    .optional()
+    .superRefine((b, ctx) => {
+      if (b == null) return;
+      const err = validateBranchName(b);
+      if (err) ctx.addIssue({ code: z.ZodIssueCode.custom, message: err });
+    }),
+});
+export type CreateSandboxSpec = z.infer<typeof CreateSandboxSpecSchema>;
+
 /** The validated shape a caller may enqueue. adw_name's on-disk existence (the
  *  dynamic allowlist — so a cockpit-built ADW is launchable at once) is checked
  *  in enqueue() against THIS project's adws/ dir, not here, since the schema has
@@ -59,6 +106,8 @@ export const EnqueueSpecSchema = z.object({
   request: z.string().trim().min(1, 'request is required').max(20_000),
   agent: z.string().trim().min(1).max(64).nullable().optional(),
   config: z.string().trim().min(1).max(512).nullable().optional(),
+  /** Bind this run to a sandbox (sandboxes.id); omitted/null = a local run at REPO_ROOT. */
+  sandbox_id: z.string().trim().min(1).max(64).nullable().optional(),
   requested_by: z.string().trim().min(1).max(120).nullable().optional(),
 });
 export type EnqueueSpec = z.infer<typeof EnqueueSpecSchema>;
@@ -77,8 +126,11 @@ export class AtelierControl {
   private readonly db: Database.Database;
   /** This project's adws/ dir — the allowlist enqueue() validates adw_name against. */
   private readonly adwsDir: string;
+  /** This project's repo root — recorded on a sandbox row (display; the worker
+   *  keys its git ops off its own REPO_ROOT). */
+  private readonly projectRoot: string;
 
-  constructor(path: string, adwsDir: string) {
+  constructor(path: string, adwsDir: string, projectRoot: string) {
     if (!existsSync(path)) {
       throw new Error(
         `sssf.db not found at ${path} — run an ADW in the engine (or set SSSF_DB) ` +
@@ -86,11 +138,31 @@ export class AtelierControl {
       );
     }
     this.adwsDir = adwsDir;
+    this.projectRoot = projectRoot;
     this.db = new Database(path);
     this.db.pragma('busy_timeout = 5000');
     this.db.pragma('synchronous = NORMAL');
-    // We own the write side of run_queue, so we may create it — but only it.
+    // We own the write side of run_queue + sandboxes, so we may create them — but
+    // only those. The worker fills every engine-owned column.
     this.db.exec(RUN_QUEUE_DDL);
+    this.db.exec(SANDBOXES_DDL);
+    // CREATE IF NOT EXISTS won't add sandbox_id to a run_queue made before it, so
+    // self-heal that additive column (we INSERT into it) — the write-side mirror
+    // of the tracer's MIGRATIONS and queue.py::ensure_schema.
+    const cols = this.db.prepare('PRAGMA table_info(run_queue)').all() as { name: string }[];
+    if (!cols.some((c) => c.name === 'sandbox_id')) {
+      this.db.exec('ALTER TABLE run_queue ADD COLUMN sandbox_id TEXT');
+    }
+    // Same for the slice-4 land_* columns over a sandboxes table made before them
+    // (we flip land_requested) — the write-side mirror of tracer.py MIGRATIONS and
+    // sandboxes.py::ensure_schema.
+    const sbCols = this.db.prepare('PRAGMA table_info(sandboxes)').all() as { name: string }[];
+    if (!sbCols.some((c) => c.name === 'land_requested')) {
+      this.db.exec('ALTER TABLE sandboxes ADD COLUMN land_requested INTEGER DEFAULT 0');
+    }
+    if (!sbCols.some((c) => c.name === 'land_result')) {
+      this.db.exec('ALTER TABLE sandboxes ADD COLUMN land_result TEXT');
+    }
   }
 
   close(): void {
@@ -104,12 +176,22 @@ export class AtelierControl {
     if (!readAdwNames(this.adwsDir).has(parsed.adw_name)) {
       throw new EnqueueError(`unknown adw_name '${parsed.adw_name}' for this project`);
     }
+    // A sandbox-bound run must target a sandbox that can still host it — reject a
+    // stale/unknown/gone id here so the operator sees the error, rather than the
+    // run sitting queued until the worker fails it as orphaned.
+    if (parsed.sandbox_id != null) {
+      const sb = this.getSandbox(parsed.sandbox_id);
+      if (!sb) throw new EnqueueError(`unknown sandbox '${parsed.sandbox_id}'`);
+      if (sb.status && TERMINAL_SANDBOX_STATUSES.includes(sb.status)) {
+        throw new EnqueueError(`sandbox '${parsed.sandbox_id}' is ${sb.status}`);
+      }
+    }
     const adwId = newAdwId();
     const info = this.db
       .prepare(
-        `INSERT INTO run_queue (adw_id, adw_name, agent, request, config, status,
-                                requested_by, cancel_requested, enqueued_at)
-         VALUES (?, ?, ?, ?, ?, 'queued', ?, 0, ?)`,
+        `INSERT INTO run_queue (adw_id, adw_name, agent, request, config, sandbox_id,
+                                status, requested_by, cancel_requested, enqueued_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, 0, ?)`,
       )
       .run(
         adwId,
@@ -117,10 +199,64 @@ export class AtelierControl {
         parsed.agent ?? null,
         parsed.request,
         parsed.config ?? null,
+        parsed.sandbox_id ?? null,
         parsed.requested_by ?? null,
         nowIso(),
       );
     return { id: Number(info.lastInsertRowid), adw_id: adwId };
+  }
+
+  // ── sandboxes ──────────────────────────────────────────────────────────────
+  // Same determinism spine as run_queue: create = INSERT a `requested` row; shut
+  // down = flip `shutdown_requested`. The worker provisions the worktree and
+  // disposes — the cockpit never spawns a process.
+
+  private readonly SANDBOX_COLS =
+    `id, project_root, level, worktree_path, branch, ports, status, tip_sha,
+     shutdown_requested, land_requested, land_result, error, created_at`;
+
+  /** INSERT a sandbox request; returns the id the worker will provision under. */
+  createSandbox(spec: CreateSandboxSpec): { id: string } {
+    const parsed = CreateSandboxSpecSchema.parse(spec);
+    const id = newAdwId(); // same 8-hex shape as an adw_id
+    const branch = parsed.branch ?? `adw/${id}`;
+    this.db
+      .prepare(
+        `INSERT INTO sandboxes (id, project_root, level, branch, status,
+                                shutdown_requested, created_at)
+         VALUES (?, ?, ?, ?, 'requested', 0, ?)`,
+      )
+      .run(id, this.projectRoot, parsed.level, branch, nowIso());
+    return { id };
+  }
+
+  /** Ask the worker to tear a sandbox down (flip the flag). Idempotent; returns
+   *  the row's new state, or null if unknown or already gone. */
+  requestShutdown(id: string): Sandbox | null {
+    const sb = this.getSandbox(id);
+    if (!sb) return null;
+    if (sb.status && TERMINAL_SANDBOX_STATUSES.includes(sb.status)) return null;
+    this.db.prepare('UPDATE sandboxes SET shutdown_requested=1 WHERE id=?').run(id);
+    return this.getSandbox(id);
+  }
+
+  /** Ask the worker to run this sandbox's `land` hook (flip `land_requested`).
+   *  Only an `active` sandbox can land — a run may only target an active tree and
+   *  the worktree must exist for the hook — so a non-active sandbox is rejected
+   *  (null). Idempotent; landing never destroys the sandbox. Returns the new state. */
+  requestLand(id: string): Sandbox | null {
+    const sb = this.getSandbox(id);
+    if (!sb) return null;
+    if (sb.status !== 'active') return null;
+    this.db.prepare('UPDATE sandboxes SET land_requested=1 WHERE id=?').run(id);
+    return this.getSandbox(id);
+  }
+
+  getSandbox(id: string): Sandbox | null {
+    const row = this.db
+      .prepare(`SELECT ${this.SANDBOX_COLS} FROM sandboxes WHERE id=?`)
+      .get(id);
+    return row ? (SandboxRowSchema.parse(row) as Sandbox) : null;
   }
 
   /**
@@ -175,7 +311,7 @@ export function getControl(projectId?: string): AtelierControl {
   const map = (globalForControl.__atelierControls ??= new Map<string, AtelierControl>());
   let control = map.get(paths.dbPath);
   if (!control) {
-    control = new AtelierControl(paths.dbPath, paths.adwsDir);
+    control = new AtelierControl(paths.dbPath, paths.adwsDir, paths.root);
     map.set(paths.dbPath, control);
   }
   return control;

@@ -14,14 +14,25 @@ import { projectHref, withProject } from '@/lib/project-url';
  * spawns anything. The worker (just worker) drains the row into a real run.
  *
  * `catalog` is built live from the ADWs on disk (see app/queue/page.tsx), so an
- * ADW composed in /skills shows up here without a code change.
+ * ADW composed in /skills shows up here without a code change. `sandboxes` are the
+ * project's ACTIVE sandboxes — pick one to run the ADW inside its isolated worktree
+ * (a serialized follow-up run); the default is a local run at REPO_ROOT.
  */
-export function QueueLauncher({ catalog }: { catalog: AdwSpec[] }) {
+export type SandboxOption = { id: string; branch: string | null };
+
+export function QueueLauncher({
+  catalog,
+  sandboxes = [],
+}: {
+  catalog: AdwSpec[];
+  sandboxes?: SandboxOption[];
+}) {
   const router = useRouter();
   const projectId = useProjectId();
   const [request, setRequest] = useState('');
   const [manualAdw, setManualAdw] = useState<string | null>(null);
   const [agent, setAgent] = useState<string>('scout');
+  const [sandboxId, setSandboxId] = useState<string>(''); // '' = local run
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [launched, setLaunched] = useState<{ id: number; adw_id: string } | null>(null);
@@ -46,6 +57,7 @@ export function QueueLauncher({ catalog }: { catalog: AdwSpec[] }) {
           adw_name: adwName,
           request: trimmed,
           agent: spec?.usesAgent ? agent : null,
+          sandbox_id: sandboxId || null,
           requested_by: 'cockpit',
         }),
       });
@@ -113,6 +125,25 @@ export function QueueLauncher({ catalog }: { catalog: AdwSpec[] }) {
                 {AGENT_ROSTER.map((a) => (
                   <option key={a} value={a}>
                     {a}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
+
+          {sandboxes.length > 0 && (
+            <Field label="Sandbox">
+              <select
+                value={sandboxId}
+                onChange={(e) => setSandboxId(e.target.value)}
+                className="min-w-[150px] border border-os-border bg-os-bg px-2 py-[7px] font-mono text-[12px] text-os-text outline-none focus:border-os-border-strong"
+                title="Run inside an isolated worktree (serialized), or locally at the repo root"
+              >
+                <option value="">local (repo root)</option>
+                {sandboxes.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.id}
+                    {s.branch ? ` · ${s.branch}` : ''}
                   </option>
                 ))}
               </select>

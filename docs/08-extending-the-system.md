@@ -10,7 +10,7 @@ itself](#using-atelier-to-extend-itself), is the payoff: pointing the factory at
 The seam (`sssf.db`) is defined in Python and read in TypeScript. **Any change to a trace table
 in `engine/adws/adw_modules/tracer.py` must be mirrored in the cockpit, or Python↔TS drift
 silently corrupts the reader.** Before you touch a schema, internalize the checklist in
-[Recipe E](#recipe-e-add-a-column-to-a-trace-table-or-run_queue). `pnpm check:contract` is the
+[Recipe E](#recipe-e--add-a-column-to-a-trace-table-or-run_queue). `pnpm check:contract` is the
 gate that catches most (not all) drift — run it after any schema change.
 
 The roster config has a second mirror with the same discipline but **no machine check**:
@@ -165,6 +165,31 @@ cd cockpit && pnpm typecheck && pnpm check:contract && pnpm build
 and confirm the value lands: `just <peek>` or the run/queue view. After adding any new
 `AtelierDb` **method**, restart `pnpm dev` — the connection is memoized on `globalThis`, so HMR
 keeps a stale one ("X is not a function").
+
+### The sandbox feature is the worked example
+
+The **sandbox / isolated runs** feature is this recipe applied end-to-end — a whole new control
+table *plus* migration-added columns — and is the canonical reference when you're unsure which
+sites a change touches:
+
+- **New table.** `sandboxes` is defined once in `engine/adws/adw_modules/sandboxes.py`
+  (`SANDBOXES_DDL`), folded into the tracer's `SCHEMA` (like `RUN_QUEUE_DDL`), and mirrored in
+  `types.ts` (`Sandbox`), `schemas.ts` (`SandboxRowSchema` + `TABLE_COLUMNS`), `check-contract.ts`,
+  and `control.ts` (`AtelierControl` owns its write side — create + shutdown + land). A brand-new
+  *table* is a **hard** contract requirement (no migration grace).
+- **New `run_queue` column.** `sandbox_id` (nullable) binds a run to a sandbox; it rides the
+  `run_queue` DDL in `queue.py`, `tracer.py` `MIGRATIONS`, `EnqueueSpecSchema` + the INSERT in
+  `control.ts`, `check-contract.ts`'s `MIGRATION_COLUMNS`, and `db.ts::queue()` (via
+  `optionalColumn` so an old db returns NULL).
+- **Migration-added columns.** The landing slice added `land_requested` + `land_result` to the
+  *existing* `sandboxes` table — so they appear in `SANDBOXES_DDL` **and** `MIGRATIONS`, with an
+  `ALTER`-self-heal in both `sandboxes.py::ensure_schema` (engine) and `control.ts`'s constructor
+  (cockpit write side), `.optional()` in Zod, listed in `MIGRATION_COLUMNS`, and read via
+  `optionalColumn` — the exact "existing dbs must still validate" path steps 4–6 describe.
+
+The lesson: a control-plane table lives in its own engine module (not `tracer.py`) but still folds
+into `SCHEMA`, and the cockpit's **write** mirror (`control.ts`) needs the same DDL + ALTER
+discipline as the engine, because both connections may be the first to open an older db.
 
 ---
 

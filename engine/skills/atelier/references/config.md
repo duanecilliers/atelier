@@ -223,3 +223,52 @@ Rule: **every entry in `harness_engineering` that registers a tool must have tha
 `harness_engineering` is a `pi`-backend mechanism: entries are pi extension **file paths**, passed through as `pi -e <path>`, one flag per entry, scoped to that agent only. This is where per-agent harness changes live — e.g. an output-tightening extension for a pi agent that keeps wrapping its envelope in prose. The starter roster ships with none, and `claude_code` agents need none — leave the field empty for them.
 
 **If the extension registers a tool, name that tool in the agent's `tools` list too** — `--tools` filters extension tools exactly like builtins, so an unnamed extension tool is silently unavailable no matter that the extension loaded fine. See [Extension tools must be named explicitly](#extension-tools-must-be-named-explicitly-pi-only) above. Extensions that only shape output or add flags (no tool registration) need no `tools` change.
+
+## Sandbox
+
+The optional `sandbox:` block declares **how this project provisions and lands an isolated,
+persistent workspace** — a git worktree on a named branch that hosts one or more runs. It is
+per-project config the worker reads; the operating model (create / attach / land / shut down, the
+worker's reconcile + reap) is in [cookbooks/sandboxes.md](../cookbooks/sandboxes.md). Absent it,
+every run is `local` (the repo root, byte-identical to today).
+
+```yaml
+sandbox:
+  default: local                 # level a launch uses when it doesn't override
+  worktree_env:                  # the L2 profile — keyed by level name
+    branch: adw/${SANDBOX_ID}    # named branch the worktree checks out (survives teardown)
+    setup:                       # shell commands, run ONCE at create (cwd = the worktree)
+      - pnpm install --frozen-lockfile
+    ports:
+      WEB: auto                  # engine allocates a free port per entry → $WEB, injected into runs
+      DB:  auto
+    services:                    # backing services — mechanism-agnostic shell hooks
+      up:   docker compose -p ${SANDBOX_ID} up -d     # once at create, after setup
+      down: docker compose -p ${SANDBOX_ID} down -v   # at shutdown, before the tree is removed
+    env:
+      DATABASE_URL: postgres://localhost:${DB}/app    # injected into every run in the sandbox
+    land:
+      mode: pr                   # pr | merge | manual
+      cmd:  gh pr create --fill --head ${BRANCH}
+```
+
+| Field | Meaning |
+|---|---|
+| `default` | Level a launch uses when it doesn't pick one: `local` (no worktree) · `worktree` (L1, write isolation) · `worktree_env` (L2, + deps/ports/services/env). The level vocabulary is a **bounded seam enum** (shared with the cockpit); provisioning and landing are per-project. |
+| `<level>:` | A profile block **keyed by level name** (`worktree_env` above). A project declares one per non-`local` level it uses. |
+| `branch` | The named branch the worktree checks out. Survives teardown in the shared `.git`. |
+| `setup` | Shell commands run once at create, `cwd` = the worktree. Warms deps so follow-up runs start instantly. |
+| `ports` | `NAME: auto` → the engine probes a free port and exposes it as `${NAME}` to `setup`/`services`/`env`/`land` **and** injects it into every run's process env, so the app reads the same port its services bound to. |
+| `services.up` / `services.down` | Bring backing services up at create / down at shutdown (and best-effort during orphan reaping). Shell strings — the engine is **mechanism-agnostic** (compose, testcontainers, anything). `-p ${SANDBOX_ID}` makes `down` targetable even after a worker restart. Atelier itself needs none. |
+| `env` | Extra process env injected into every run in the sandbox, after interpolation. |
+| `land.mode` | `pr` \| `merge` \| `manual`. `manual` (the default when `land` is absent) runs nothing — the branch is left for a human. |
+| `land.cmd` | The shell hook for `pr`/`merge`. Its stdout (a PR URL / merge summary) is captured and surfaced as the sandbox's `land_result`. A `pr`/`merge` mode with no `cmd` is a misconfiguration, recorded plainly rather than reported as a clean manual land. |
+
+**Interpolation.** `${SANDBOX_ID}`, `${BRANCH}`, and each allocated port name (`${WEB}`, `${DB}`)
+are available to `setup`, `services`, `env`, and `land`. Nothing else is — a hook is a plain shell
+string, so keep it injection-safe (the branch name is charset-validated for exactly this reason).
+
+**Determinism spine intact.** Provisioning changes only a run's `cwd` and env; the argv the worker
+spawns is byte-identical to a local run. `SSSFConfig.sandbox` (Pydantic) is mirrored by hand in
+`cockpit/lib/roster.ts` (Zod) with the level vocab in `roster-constants.ts` — same hand-kept
+discipline as the rest of the config mirror (`pnpm check:contract` covers db tables, not the file).

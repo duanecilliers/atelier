@@ -25,6 +25,7 @@ paths and `writes:` allowlists resolve where agents actually write.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import signal
@@ -35,7 +36,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from adw_modules import agents, git_helper, queue, registry, workers
+from adw_modules import agents, git_helper, provision, queue, registry, sandboxes, workers
+from adw_modules.data_types import SandboxConfig, SandboxProfile
 from adw_modules.utils import ensure_dir, now_iso
 
 # The repo (git) root every ADW is launched in, so its relative config paths and
@@ -115,8 +117,28 @@ class Job:
     row: sqlite3.Row
     proc: subprocess.Popen
     log: object  # open file handle for the child's stdout/stderr
+    sandbox_id: str | None = None   # the sandbox this run is bound to (serializes per sandbox)
+    worktree_path: str | None = None  # its worktree, so we can read tip_sha when the run ends
     canceling: bool = False
     kill_deadline: float | None = field(default=None)
+
+
+# Persistent sandbox worktrees live OUTSIDE the repo (no .gitignore churn, and
+# show-toplevel still resolves inside them), namespaced by project + sandbox id.
+WORKTREES_ROOT = Path.home() / ".atelier" / "worktrees"
+
+
+def worktree_path_for(sandbox_id: str) -> Path:
+    """Where this worker puts a sandbox's worktree: ~/.atelier/worktrees/<project>/<id>.
+    Namespaced by REPO_ROOT's name so two projects' sandboxes never collide."""
+    return WORKTREES_ROOT / REPO_ROOT.name / sandbox_id
+
+
+def provision_log_path(sandbox_id: str) -> Path:
+    """The sandbox's provision/services log — beside the worktree, never inside it,
+    so setup/services output can't surface as an untracked file in the sandbox's own
+    diff. Shared by provisioning, teardown, and startup reaping."""
+    return worktree_path_for(sandbox_id).parent / f"{sandbox_id}.provision.log"
 
 
 def connect(db_path: str) -> sqlite3.Connection:
@@ -129,12 +151,12 @@ def connect(db_path: str) -> sqlite3.Connection:
     return conn
 
 
-def build_argv(row: sqlite3.Row, worker_config: str) -> list[str] | None:
-    """The CLI argv for a queued row, or None if adw_name is not a valid script."""
+def build_argv(row: sqlite3.Row, config: str) -> list[str] | None:
+    """The CLI argv for a queued row, or None if adw_name is not a valid script.
+    `config` is the already-resolved roster path (absolute for a sandbox run)."""
     adw_name = (row["adw_name"] or "").strip()
     if not ADW_NAME_RE.match(adw_name):
         return None
-    config = row["config"] or worker_config
     script = script_for(adw_name, config)
     if script is None:
         return None
@@ -147,21 +169,48 @@ def build_argv(row: sqlite3.Row, worker_config: str) -> list[str] | None:
     return argv
 
 
-def spawn(row: sqlite3.Row, worker_config: str, data_dir: str) -> Job | None:
-    """Launch the ADW in its own process group, logging to the run's session dir."""
-    argv = build_argv(row, worker_config)
+def spawn(row: sqlite3.Row, worker_config: str, data_dir: str,
+          worktree_path: str | None = None,
+          run_env: dict[str, str] | None = None) -> Job | None:
+    """Launch the ADW in its own process group, logging to the run's session dir.
+
+    A local run (worktree_path None) runs with cwd=REPO_ROOT and inherits the
+    worker's env — byte-for-byte identical to today. A SANDBOX run runs with
+    cwd=<worktree> (the execution surface repo_root() resolves to) but is told
+    SSSF_TRACE_ROOT=REPO_ROOT so its trace still lands in the shared db, and its
+    --config is absolutized to the REAL repo so roster/db/quality come from the
+    engine, not whatever the sandbox branch happens to carry. `run_env` (a
+    worktree_env sandbox's allocated ports + interpolated profile env) is layered
+    on top so the agent and the app reach the same per-sandbox ports/services.
+    """
+    config = row["config"] or worker_config
+    cwd = REPO_ROOT
+    env = None
+    if worktree_path:
+        cwd = Path(worktree_path)
+        if not Path(config).is_absolute():
+            config = str((REPO_ROOT / config).resolve())
+        env = os.environ.copy()
+        # Profile env first, THEN the engine-owned signal — so a profile can never
+        # clobber SSSF_TRACE_ROOT and redirect the trace into the worktree (the one
+        # thing this whole design exists to keep anchored at the real repo root).
+        if run_env:
+            env.update(run_env)
+        env["SSSF_TRACE_ROOT"] = str(REPO_ROOT)
+    argv = build_argv(row, config)
     if argv is None:
         return None
     session_dir = ensure_dir(REPO_ROOT / data_dir / "sessions" / row["adw_id"])
     log = open(session_dir / "worker.log", "a", buffering=1)
-    log.write(f"\n$ {' '.join(argv)}\n")
+    log.write(f"\n$ (cwd={cwd}) {' '.join(argv)}\n")
     # start_new_session=True → the child leads its own process group, so a cancel
     # signals the whole ADW + its agent children, not just `uv`.
     proc = subprocess.Popen(
-        argv, cwd=str(REPO_ROOT), stdout=log, stderr=subprocess.STDOUT,
-        start_new_session=True,
+        argv, cwd=str(cwd), stdout=log, stderr=subprocess.STDOUT,
+        start_new_session=True, env=env,
     )
-    return Job(queue_id=row["id"], row=row, proc=proc, log=log)
+    return Job(queue_id=row["id"], row=row, proc=proc, log=log,
+               sandbox_id=row["sandbox_id"], worktree_path=worktree_path)
 
 
 def signal_group(proc: subprocess.Popen, sig: int) -> None:
@@ -170,6 +219,235 @@ def signal_group(proc: subprocess.Popen, sig: int) -> None:
         os.killpg(os.getpgid(proc.pid), sig)
     except (ProcessLookupError, PermissionError):
         pass
+
+
+# ── sandbox reconciliation ──────────────────────────────────────────────────
+# The worker is the ONLY thing that turns sandbox intent (a `sandboxes` row) into
+# a real worktree, exactly as it is the only thing that turns a run_queue row into
+# a process. The cockpit requests (INSERT) and asks for teardown (shutdown_requested);
+# the worker disposes. Provisioning is per sandbox (at create), not per run, so
+# follow-up runs start instantly against a warm tree.
+
+
+def _row_ctx(row: sqlite3.Row) -> dict[str, str]:
+    """The interpolation ctx for a PERSISTED sandbox row — its id, branch (with the
+    default-branch fallback), and allocated ports (JSON on the row). One place maps
+    a row to ctx, so teardown and reaping can't drift from each other."""
+    ports = json.loads(row["ports"]) if row["ports"] else {}
+    return provision.base_ctx(row["id"], row["branch"] or f"adw/{row['id']}", ports)
+
+
+def _reap_services(sandbox_id: str, cwd: str | Path, ctx: dict[str, str],
+                   down: str) -> None:
+    """Best-effort `services.down` for a sandbox, streaming to its provision log.
+    Used on provision failure, at teardown, and in startup reaping — a failing or
+    absent `down` must never wedge the caller or block a worktree removal, so every
+    error is swallowed (and printed). The `-p ${SANDBOX_ID}` naming pattern lets
+    `down` cleanly target this sandbox's own services even after a worker restart."""
+    try:
+        log = open(provision_log_path(sandbox_id), "a", buffering=1)
+        try:
+            provision.run_services(down, cwd, ctx, log)
+        finally:
+            log.close()
+    except Exception as exc:
+        print(f"[worker] sandbox {sandbox_id} services.down failed (continuing): {exc}")
+
+
+def provision_sandbox(conn: sqlite3.Connection, row: sqlite3.Row,
+                      profile: SandboxProfile | None) -> None:
+    """Turn a `requested` sandbox into an `active` worktree, or mark it `failed`.
+
+    L1 (no profile) is just the worktree. A profile (worktree_env) additionally
+    provisions ONCE, here, so follow-up runs start against a warm tree: allocate a
+    free port per `ports` entry (persisted as JSON on the row), run the project's
+    `setup` commands, then bring its backing `services.up`. Any failure — git, a
+    setup command, or `services.up` — marks the sandbox `failed` and spawns no runs
+    into it."""
+    sid = row["id"]
+    branch = row["branch"] or f"adw/{sid}"
+    path = worktree_path_for(sid)
+    sandboxes.set_status(conn, sid, sandboxes.PROVISIONING)
+    ports: dict[str, int] = {}
+    services_up_attempted = False
+    try:
+        ensure_dir(path.parent)
+        git_helper.worktree_add(REPO_ROOT, path, branch)
+        if profile is not None:
+            ports = provision.allocate_ports(profile.ports.keys())
+            if ports:
+                sandboxes.set_ports(conn, sid, json.dumps(ports))
+            ctx = provision.base_ctx(sid, branch, ports)
+            if profile.setup or profile.services.up:
+                # setup + services.up log beside the worktree (provision_log_path),
+                # never inside it — provision artifacts must not surface as untracked
+                # files in the sandbox's own diff.
+                log = open(provision_log_path(sid), "a", buffering=1)
+                try:
+                    if profile.setup:
+                        provision.run_setup(profile.setup, path, ctx, log)
+                    if profile.services.up:
+                        # Mark BEFORE running: a partial `up` may already have bound
+                        # containers, so the failure path must still bring them down.
+                        services_up_attempted = True
+                        provision.run_services(profile.services.up, path, ctx, log)
+                finally:
+                    log.close()
+        sandboxes.set_status(conn, sid, sandboxes.ACTIVE, worktree_path=str(path))
+        print(f"[worker] sandbox {sid} → active ({path}, branch {branch})")
+    except Exception as exc:  # git / setup / services.up: don't host runs on a half-made tree
+        # Roll everything back before marking FAILED. A FAILED sandbox can't be torn
+        # down later (the cockpit refuses shutdown on a terminal status, and
+        # worktree_prune won't reap a dir that still exists), so anything left now
+        # leaks forever. If `services.up` ran, bring services down FIRST (targetable
+        # via `-p ${SANDBOX_ID}`) — a partial `up` may have started containers —
+        # while the tree (and its compose file) still exists, THEN remove the tree.
+        # The provision log lives beside the worktree, so it survives for debugging.
+        if services_up_attempted and profile is not None and profile.services.down:
+            _reap_services(sid, path, provision.base_ctx(sid, branch, ports),
+                           profile.services.down)
+        try:
+            git_helper.worktree_remove(REPO_ROOT, path)
+        except Exception:
+            pass
+        sandboxes.set_status(conn, sid, sandboxes.FAILED, error=str(exc)[:500])
+        print(f"[worker] sandbox {sid} → failed to provision: {exc}")
+
+
+def teardown_sandbox(conn: sqlite3.Connection, row: sqlite3.Row,
+                     profile: SandboxProfile | None) -> None:
+    """Bring a sandbox's backing services down, remove its worktree, and mark it
+    `gone`. `services.down` runs FIRST — while the tree and its compose file still
+    exist — but best-effort: a failing hook logs and the teardown continues, so a
+    wedged service can never leak the worktree. The named branch and its commits
+    survive in the shared .git (that is the whole point of a worktree)."""
+    sid = row["id"]
+    sandboxes.set_status(conn, sid, sandboxes.SHUTTING_DOWN)
+    if profile is not None and profile.services.down and row["worktree_path"]:
+        _reap_services(sid, row["worktree_path"], _row_ctx(row), profile.services.down)
+    try:
+        if row["worktree_path"]:
+            git_helper.worktree_remove(REPO_ROOT, row["worktree_path"])
+        sandboxes.set_status(conn, sid, sandboxes.GONE)
+        print(f"[worker] sandbox {sid} → gone")
+    except Exception as exc:
+        # Best-effort: record why but still mark gone, so a stuck remove can't
+        # wedge the sandbox in shutting_down forever. `worktree prune` at the next
+        # startup cleans up git's record of a directory we couldn't delete.
+        sandboxes.set_status(conn, sid, sandboxes.GONE, error=str(exc)[:500])
+        print(f"[worker] sandbox {sid} → gone (teardown error: {exc})")
+
+
+def land_sandbox(conn: sqlite3.Connection, row: sqlite3.Row,
+                 profile: SandboxProfile | None) -> None:
+    """Run a sandbox's `land` hook once, then return it to `active` — landing NEVER
+    destroys the sandbox (that's shutdown's job). Claims the request by flipping to
+    `landing` and clearing the flag (so a mid-land crash is reaped back to active,
+    not re-run, and a retry needs a fresh request). `mode: manual` (or no profile /
+    no cmd) records that the branch was left for a human and runs nothing. The hook's
+    captured output (a PR URL / merge summary) is stored for the cockpit to surface;
+    a failure leaves the sandbox `active` with the error recorded, re-requestable."""
+    sid = row["id"]
+    land = profile.land if profile is not None else None
+    sandboxes.claim_land(conn, sid)
+    try:
+        if land is None or land.mode == "manual":
+            result = f"manual — branch {row['branch']} left for a human"
+        elif not land.cmd:
+            # A pr/merge mode with no cmd is a misconfiguration — record it plainly
+            # rather than reporting a clean "manual" land the operator never asked for.
+            result = f"{land.mode}: no land command configured — branch {row['branch']} left as-is"
+        else:
+            # The land hook logs beside the worktree, like setup/services.
+            log = open(provision_log_path(sid), "a", buffering=1)
+            try:
+                out = provision.run_land(land.cmd, row["worktree_path"], _row_ctx(row), log)
+            finally:
+                log.close()
+            result = f"{land.mode}: {out}" if out else land.mode
+        sandboxes.finish_land(conn, sid, land_result=result[:1000])
+        print(f"[worker] sandbox {sid} landed ({result[:120]})")
+    except Exception as exc:
+        # The tree is untouched — return to active so the operator can re-request.
+        sandboxes.finish_land(conn, sid, error=str(exc)[:500])
+        print(f"[worker] sandbox {sid} → land failed (still active): {exc}")
+
+
+def reap_orphan_sandboxes(conn: sqlite3.Connection, sandbox_cfg: SandboxConfig) -> None:
+    """Recover sandboxes a crashed worker left mid-lifecycle, at startup. One worker
+    owns its project's sandboxes exclusively (supervisor guarantees one per project;
+    standalone sweeps its own stale worker row), so any sandbox still in a TRANSIENT
+    state — `provisioning` or `shutting_down` — belongs to a predecessor that died,
+    and no live run can be using it. Bring its services down (best-effort, targetable
+    via `-p ${SANDBOX_ID}` even though the old worker is gone), remove any leftover
+    worktree, and resolve the status: one caught mid-provision becomes `failed`, one
+    caught mid-teardown becomes `gone`. A sandbox caught mid-`landing` is different:
+    landing is non-destructive (it never touches the worktree or services), so it is
+    simply returned to `active` — nothing to reap, the land just didn't finish and is
+    re-requestable."""
+    orphans = (sandboxes.with_status(conn, sandboxes.PROVISIONING)
+               + sandboxes.with_status(conn, sandboxes.SHUTTING_DOWN))
+    for row in orphans:
+        sid = row["id"]
+        was = row["status"]
+        profile = sandbox_cfg.profile_for(row["level"])
+        # The predecessor may have died before persisting worktree_path; fall back to
+        # this sandbox's canonical location so a leftover tree is still reaped.
+        cwd = row["worktree_path"] or str(worktree_path_for(sid))
+        if profile is not None and profile.services.down:
+            _reap_services(sid, cwd, _row_ctx(row), profile.services.down)
+        try:
+            git_helper.worktree_remove(REPO_ROOT, cwd)
+        except Exception:
+            pass
+        terminal = sandboxes.GONE if was == sandboxes.SHUTTING_DOWN else sandboxes.FAILED
+        detail = ("worker restart during teardown" if was == sandboxes.SHUTTING_DOWN
+                  else "worker restart during provisioning")
+        sandboxes.set_status(conn, sid, terminal, error=detail)
+        print(f"[worker] reaped orphan sandbox {sid} ({was} → {terminal})")
+    # A land in flight when the worker died: the tree is intact, so just resurface it
+    # as active with a note (land_requested was cleared at claim, so it won't re-run).
+    for row in sandboxes.with_status(conn, sandboxes.LANDING):
+        sid = row["id"]
+        sandboxes.finish_land(conn, sid, error="worker restart during landing")
+        print(f"[worker] reaped orphan sandbox {sid} (landing → active)")
+
+
+def reconcile_sandboxes(conn: sqlite3.Connection, jobs: dict[int, Job],
+                        sandbox_cfg: SandboxConfig) -> None:
+    """One reconciliation pass: provision new sandboxes, tear down retired ones,
+    and fail runs orphaned by a dead sandbox. Called every poll."""
+    for row in sandboxes.with_status(conn, sandboxes.REQUESTED):
+        provision_sandbox(conn, row, sandbox_cfg.profile_for(row["level"]))
+    # Only tear down / land a sandbox with no run currently in flight — a live run
+    # keeps its tree busy (a land hook and a run must not race on the same tree); it
+    # is reaped from `jobs` first, below, so a retire/land waits at most one poll.
+    busy = {j.sandbox_id for j in jobs.values() if j.sandbox_id}
+    for row in sandboxes.shutdown_pending(conn):
+        if row["id"] in busy:
+            continue
+        teardown_sandbox(conn, row, sandbox_cfg.profile_for(row["level"]))
+    # Land AFTER teardown: a sandbox flagged for both shuts down (the stronger intent)
+    # rather than landing a tree that's about to vanish — shutdown_pending flips it out
+    # of `active`, so land_pending (active-only) then skips it.
+    for row in sandboxes.land_pending(conn):
+        if row["id"] in busy:
+            continue
+        land_sandbox(conn, row, sandbox_cfg.profile_for(row["level"]))
+    for adw_id in queue.fail_orphaned(conn, sandboxes.dead_ids(conn)):
+        print(f"[worker] run {adw_id} → failed (its sandbox is gone/failed)")
+
+
+def sandbox_run_env(sb: sqlite3.Row, sandbox_cfg: SandboxConfig) -> dict[str, str] | None:
+    """The extra process env for a run bound to sandbox `sb` — its allocated ports
+    plus the profile's interpolated `env` — or None when the level provisions no
+    env (an L1 worktree). Recomputed from the persisted ports each run."""
+    profile = sandbox_cfg.profile_for(sb["level"])
+    if profile is None:
+        return None
+    ports = json.loads(sb["ports"]) if sb["ports"] else {}
+    branch = sb["branch"] or f"adw/{sb['id']}"
+    return provision.run_env(profile, ports, sb["id"], branch)
 
 
 def drain(conn: sqlite3.Connection, config: str, concurrency: int, poll: float,
@@ -237,6 +515,15 @@ def drain(conn: sqlite3.Connection, config: str, concurrency: int, poll: float,
                 status = queue.FAILED
                 err = f"exit {rc}" if rc >= 0 else f"signal {-rc}"
             queue.mark_terminal(conn, qid, status, exit_code=rc, error=err)
+            # A sandbox run just committed (or not) into its worktree — record the
+            # tip so the cockpit shows exactly what the sandbox now holds. Best
+            # effort: a missing worktree (mid-teardown) simply leaves tip_sha as-is.
+            if job.sandbox_id and job.worktree_path:
+                try:
+                    sandboxes.set_tip_sha(conn, job.sandbox_id,
+                                          git_helper.head_sha(job.worktree_path))
+                except Exception:
+                    pass
             job.log.close()
             print(f"[worker] run {job.row['adw_id']} → {status} (exit {rc})")
             del jobs[qid]
@@ -253,13 +540,40 @@ def drain(conn: sqlite3.Connection, config: str, concurrency: int, poll: float,
                 signal_group(job.proc, signal.SIGKILL)
                 print(f"[worker] cancel {job.row['adw_id']} → SIGKILL (grace elapsed)")
 
+        # 2b. Reconcile sandboxes: provision requested, tear down retired, fail
+        #     runs orphaned by a dead sandbox. Before the fill so a run enqueued
+        #     alongside a fresh sandbox can claim it the moment it goes active.
+        reconcile_sandboxes(conn, jobs, cfg.sandbox)
+
         # 3. Fill free slots with fresh work (unless shutting down).
         if not stopping:
+            # A run bound to a sandbox may only start when that sandbox is active
+            # AND not already hosting a run (runs in one sandbox serialize). Track
+            # `busy` across this fill loop so two queued rows for the same sandbox
+            # can't both launch in one poll — the second waits for the next.
+            active = sandboxes.active_ids(conn)
+            busy = {j.sandbox_id for j in jobs.values() if j.sandbox_id}
             while len(jobs) < concurrency:
-                row = queue.claim_next(conn)
+                row = queue.claim_next(conn, active - busy)
                 if row is None:
                     break
-                job = spawn(row, config, data_dir)
+                worktree_path = None
+                run_env = None
+                if row["sandbox_id"]:
+                    sb = sandboxes.get(conn, row["sandbox_id"])
+                    worktree_path = sb["worktree_path"] if sb else None
+                    if not worktree_path:
+                        # active_ids() said runnable, but the row lost its worktree
+                        # between reconcile and now — fail rather than run rootless.
+                        queue.mark_terminal(conn, row["id"], queue.FAILED,
+                                            error="sandbox has no active worktree")
+                        print(f"[worker] rejected queue #{row['id']}: "
+                              f"sandbox {row['sandbox_id']} not runnable")
+                        continue
+                    # The sandbox's provisioned ports + interpolated env ride every
+                    # run in it (None for an L1 worktree with no profile).
+                    run_env = sandbox_run_env(sb, cfg.sandbox)
+                job = spawn(row, config, data_dir, worktree_path, run_env)
                 if job is None:
                     queue.mark_terminal(conn, row["id"], queue.FAILED,
                                         error=f"unknown adw_name {row['adw_name']!r}")
@@ -268,7 +582,10 @@ def drain(conn: sqlite3.Connection, config: str, concurrency: int, poll: float,
                     continue
                 queue.mark_running(conn, row["id"], job.proc.pid)
                 jobs[job.queue_id] = job
-                print(f"[worker] run {row['adw_id']} ← {row['adw_name']} "
+                if job.sandbox_id:
+                    busy.add(job.sandbox_id)
+                where = f" in sandbox {job.sandbox_id}" if job.sandbox_id else ""
+                print(f"[worker] run {row['adw_id']} ← {row['adw_name']}{where} "
                       f"(pid {job.proc.pid})")
 
         # 4. Exit conditions.
@@ -435,6 +752,20 @@ def main() -> int:
     try:
         queue.ensure_schema(conn)
         workers.ensure_schema(conn)
+        sandboxes.ensure_schema(conn)
+        # Reap git's records of any worktrees a crashed predecessor left behind,
+        # so a stale <id> dir can't block a fresh `worktree add` on the same path.
+        try:
+            git_helper.worktree_prune(REPO_ROOT)
+        except Exception as exc:
+            print(f"[worker] worktree prune skipped: {exc}")
+        # Then recover sandboxes a predecessor left mid-lifecycle — bring their
+        # orphaned services down and resolve their transient status. Best-effort:
+        # a failure here must not stop the worker from draining its queue.
+        try:
+            reap_orphan_sandboxes(conn, cfg.sandbox)
+        except Exception as exc:
+            print(f"[worker] orphan sandbox reap skipped: {exc}")
         # Sweep any row left by a crashed predecessor — one worker per project, so
         # a prior row for this host is stale — then heartbeat cleanly from here.
         workers.clear_host(conn, host)

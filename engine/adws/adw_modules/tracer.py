@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .data_types import AgentConfig, EventRecord, GateReport, Phase
 from .queue import RUN_QUEUE_DDL
+from .sandboxes import SANDBOXES_DDL
 from .workers import WORKERS_DDL
 from .utils import ensure_dir, new_id, now_iso
 
@@ -89,7 +90,7 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   created_at    TEXT, last_used_at TEXT,
   PRIMARY KEY (adw_id, agent)
 );
-""" + RUN_QUEUE_DDL + WORKERS_DDL   # control seam (queue.py) + worker heartbeat (workers.py)
+""" + RUN_QUEUE_DDL + WORKERS_DDL + SANDBOXES_DDL   # control seam (queue.py) + worker heartbeat (workers.py) + sandboxes (sandboxes.py)
 
 # Columns added after a schema shipped. CREATE TABLE IF NOT EXISTS never
 # revisits an existing table, so additive changes need an explicit ALTER.
@@ -98,7 +99,14 @@ MIGRATIONS = [("agent_sessions", "color", "TEXT"),
               ("sessions", "adw_name", "TEXT"),
               ("agent_sessions", "context_tokens", "INTEGER"),
               ("agent_sessions", "context_window", "INTEGER"),
-              ("sessions", "archived", "INTEGER DEFAULT 0")]
+              ("sessions", "archived", "INTEGER DEFAULT 0"),
+              # run_queue predates sandboxes; bind a queued run to a sandbox
+              # (NULL = today's local run) on an existing db via ALTER.
+              ("run_queue", "sandbox_id", "TEXT"),
+              # sandboxes predates its slice-4 land seam; add the control flag +
+              # captured-result columns to an existing sandboxes table via ALTER.
+              ("sandboxes", "land_requested", "INTEGER DEFAULT 0"),
+              ("sandboxes", "land_result", "TEXT")]
 
 
 class Tracer:

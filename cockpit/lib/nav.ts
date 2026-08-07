@@ -13,6 +13,7 @@
 import {
   Activity,
   ListChecks,
+  Boxes,
   Bot,
   Sparkles,
   ShieldCheck,
@@ -26,6 +27,7 @@ export type NavItem = { href: string; label: string; icon: LucideIcon; live?: bo
 export const NAV_OPERATE: NavItem[] = [
   { href: '/', label: 'Runs', icon: Activity, live: true },
   { href: '/queue', label: 'Queue', icon: ListChecks, live: true }, // Phase 2 — control plane
+  { href: '/sandboxes', label: 'Sandboxes', icon: Boxes, live: true }, // Phase 5 — isolated persistent workspaces
 ];
 
 // The factory: the agents that propose and the skills they draw on.

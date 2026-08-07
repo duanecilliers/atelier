@@ -15,10 +15,12 @@ companion to it, not a replacement.
 > phase-by-phase from the locked roadmap in [`atelier-plan.html`](atelier-plan.html).
 > **Distribution** has landed — the engine is stampable into any repo, updatable from Atelier, with
 > a multi-project cockpit and a worker supervisor — and is documented in
-> [09-distribution.md](09-distribution.md). One item is still in design and **not yet implemented**,
-> so it is intentionally absent from these guides: **sandbox / isolated runs** (running each ADW in
-> its own throwaway git worktree for parallel-write isolation) — see the
-> [design note](design/sandbox-runs.md). This page will grow when it lands.
+> [09-distribution.md](09-distribution.md). **Sandbox / isolated runs** has also landed: an ADW can
+> run in an isolated, **persistent** git worktree on a named branch (its own deps, ports, backing
+> services, and env at L2) that hosts follow-up runs and lands via a per-project workflow — folded
+> into [05](05-config-and-roster.md) (the `sandbox:` block), [07](07-operations.md) (the worker's
+> reconcile/reap lifecycle), and [08](08-extending-the-system.md) (Recipe E is the worked seam
+> change). The [design note](design/sandbox-runs.md) records the decisions.
 
 ## Start here
 
@@ -39,7 +41,7 @@ New to the system? Read these two, in order — everything else assumes their vo
 | 04 | [Authoring ADWs](04-authoring-adws.md) | The ADW catalog, the phase-chain skeleton, `make_adw.py`, and hand-authoring a new workflow. |
 | 05 | [Config & roster](05-config-and-roster.md) | `sssf.config.yaml`: agents, models, prompts, tool/write boundaries, backend routing, and the cockpit roster editor. |
 | 06 | [The cockpit](06-cockpit.md) | The Next.js app: routes, the `lib/` layer, the three live (SSE) paths, the design system, and the read/write surfaces. |
-| 07 | [Operations](07-operations.md) | Commands, the worker & `run_queue` lifecycle, environment variables, self-build guardrails. |
+| 07 | [Operations](07-operations.md) | Commands, the worker & `run_queue` lifecycle, sandboxes (isolated persistent workspaces), environment variables, self-build guardrails. |
 | 08 | [Extending the system](08-extending-the-system.md) | End-to-end recipes: add an ADW, an agent, a gate, an envelope, a seam column, a cockpit view — and how to point the factory at its own repo. |
 | 09 | [Distribution](09-distribution.md) | Stamping the engine into any repo (`install.py`), updating it safely (`update.py` + manifest), the `/atelier` operator skill, the multi-project cockpit, and the `--supervise` worker supervisor + `workers` heartbeat. |
 
@@ -48,6 +50,7 @@ New to the system? Read these two, in order — everything else assumes their vo
 | Goal | Go to |
 | --- | --- |
 | Run a workflow / drain the queue | [Operations](07-operations.md) |
+| Run an ADW in an isolated workspace (sandbox) / configure provisioning | [Operations → sandboxes](07-operations.md#5-sandboxes--isolated-persistent-workspaces) · [Config → sandbox](05-config-and-roster.md#8-the-sandbox-block--isolated-workspaces) |
 | Understand what happens during a run | [Engine runtime](02-engine-runtime.md) → [Agents & gates](03-agents-and-gates.md) |
 | Write a new workflow | [Authoring ADWs](04-authoring-adws.md) |
 | Add or change an agent / model / prompt | [Config & roster](05-config-and-roster.md) |

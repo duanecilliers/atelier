@@ -56,6 +56,37 @@ quality:
   typecheck: { argv: ["pnpm", "--dir", "cockpit", "typecheck"], area: frontend, operation: typecheck }
   contract:  { argv: ["pnpm", "--dir", "cockpit", "check:contract"], area: frontend }
 
+# Sandbox provisioning — how a run gets an isolated, persistent workspace
+# (docs/design/sandbox-runs.md). `default: local` keeps every run byte-identical
+# to today: a run at the repo root, no worktree. A launch that picks a non-local
+# LEVEL provisions per that level's profile ONCE at sandbox create (not per run),
+# so follow-up runs start against a warm tree. `${SANDBOX_ID}`, `${BRANCH}`, and
+# each allocated port name (`${WEB}`) interpolate into setup/env/services/land.
+sandbox:
+  default: local
+  worktree_env:                       # L2: worktree + deps + ports + env
+    branch: adw/${SANDBOX_ID}         # named branch the worktree checks out (survives teardown)
+    setup:                            # shell commands, run once at create (cwd = the worktree)
+      - pnpm --dir cockpit install --prefer-offline   # warm the cockpit deps for this sandbox
+    ports:
+      WEB: auto                       # a free port allocated per sandbox → $WEB, and injected env
+    env:
+      ATELIER_SANDBOX_WEB: ${WEB}     # every run in the sandbox sees its allocated port(s)
+    # Backing services (slice 3): `up` runs once at create (after setup); `down` at
+    # shutdown (before the worktree is removed). Shell strings — the engine is
+    # mechanism-agnostic, so a hook wraps compose / testcontainers / anything.
+    # Atelier itself needs none; a full-stack project declares e.g.:
+    #   services:
+    #     up:   docker compose -p ${SANDBOX_ID} up -d      # -p ${SANDBOX_ID} → targetable by `down`
+    #     down: docker compose -p ${SANDBOX_ID} down -v    #   even after a worker restart (orphan reaping)
+    # Landing (slice 4): the cockpit's "Land" action asks the worker to run this hook
+    # ONCE, in the worktree; the sandbox stays active until separately shut down.
+    # mode: manual (the default) runs nothing — the branch is left for a human. The
+    # hook's stdout (a PR URL) is captured and surfaced. A full-stack project declares:
+    #   land:
+    #     mode: pr                                       # pr | merge | manual
+    #     cmd:  gh pr create --fill --head ${BRANCH}     # ${BRANCH}/${SANDBOX_ID}/ports interpolate
+
 agents:
   - name: planner
     coding_agent: claude_code          # plan D1: Claude planners run through the Agent SDK

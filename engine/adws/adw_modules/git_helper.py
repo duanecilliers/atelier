@@ -13,6 +13,11 @@ def _git(*args: str) -> str:
     return result.stdout.strip()
 
 
+def _git_at(cwd: str | Path, *args: str) -> str:
+    """`git -C <cwd> …` — run against a specific tree (a worktree, not the cwd)."""
+    return _git("-C", str(cwd), *args)
+
+
 def current_branch() -> str:
     return _git("rev-parse", "--abbrev-ref", "HEAD")
 
@@ -118,3 +123,45 @@ def diff_counts(base: str) -> tuple[int, int]:
 
 def diff_text(base: str) -> str:
     return _git("diff", base)
+
+
+# ── worktrees (the sandbox isolation mechanism) ──────────────────────────────
+# The native "git" sandbox provider. A worktree is a second checkout that SHARES
+# the main repo's .git, so a commit on its named branch survives `worktree remove`
+# — which is exactly what a persistent sandbox needs (see docs/design/sandbox-runs.md).
+
+def branch_exists(root: str | Path, branch: str) -> bool:
+    """True when `branch` already resolves in `root`'s repo. Never raises."""
+    result = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
+        capture_output=True, text=True)
+    return result.returncode == 0
+
+
+def worktree_add(root: str | Path, path: str | Path, branch: str) -> None:
+    """Add a worktree at `path` on `branch`, forking a new branch off HEAD when it
+    doesn't exist yet, or checking out the existing one (re-provision). The tree is
+    created OUTSIDE the repo, so no .gitignore change is needed and show-toplevel
+    resolves inside it."""
+    if branch_exists(root, branch):
+        _git_at(root, "worktree", "add", str(path), branch)
+    else:
+        _git_at(root, "worktree", "add", "-b", branch, str(path), "HEAD")
+
+
+def worktree_remove(root: str | Path, path: str | Path) -> None:
+    """Remove a worktree. `--force` so a dirty/modified sandbox still tears down
+    (explicit shutdown is a decision, not an accident). The branch and its commits
+    survive in the shared .git."""
+    _git_at(root, "worktree", "remove", "--force", str(path))
+
+
+def worktree_prune(root: str | Path) -> None:
+    """Drop git's records of worktrees whose directories are gone — startup reap of
+    anything a crashed worker left behind."""
+    _git_at(root, "worktree", "prune")
+
+
+def head_sha(cwd: str | Path) -> str:
+    """Short HEAD sha of the tree at `cwd` (a worktree) — recorded as a sandbox's tip."""
+    return _git_at(cwd, "rev-parse", "--short", "HEAD")

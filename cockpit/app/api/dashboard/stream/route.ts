@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { getDb } from '@/lib/data';
-import { queueSig, runsSig } from '@/lib/dashboard-signature';
+import { queueSig, runsSig, sandboxesSig } from '@/lib/dashboard-signature';
 
 // List-level live stream (Phase 5). The per-run tail (`/api/runs/[id]/stream`)
 // pushes event rows; the two *list* views — the Runs list (`/`) and the Queue
@@ -22,17 +22,23 @@ export const dynamic = 'force-dynamic';
 const TICK_MS = 300; // how often we recompute the signature
 const HEARTBEAT_MS = 15_000; // keep-alive comment so idle proxies don't drop us
 
-type Watch = 'runs' | 'queue';
+type Watch = 'runs' | 'queue' | 'sandboxes';
 
 /** The structural signature of the requested slice, read fresh from sqlite.
  *  Read errors bubble to the caller (pump), which swallows and retries. */
 function signature(watch: Watch, projectId: string | undefined): string {
   const db = getDb(projectId);
-  return watch === 'queue' ? queueSig(db.queue()) : runsSig(db.sessions());
+  if (watch === 'queue') return queueSig(db.queue());
+  if (watch === 'sandboxes') return sandboxesSig(db.sandboxes());
+  return runsSig(db.sessions());
+}
+
+function parseWatch(raw: string | null): Watch {
+  return raw === 'queue' || raw === 'sandboxes' ? raw : 'runs';
 }
 
 export async function GET(req: NextRequest) {
-  const watch: Watch = req.nextUrl.searchParams.get('watch') === 'queue' ? 'queue' : 'runs';
+  const watch: Watch = parseWatch(req.nextUrl.searchParams.get('watch'));
   const projectId = req.nextUrl.searchParams.get('project') ?? undefined;
   const encoder = new TextEncoder();
 

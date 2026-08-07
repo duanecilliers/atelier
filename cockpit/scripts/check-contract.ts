@@ -18,6 +18,11 @@ const MIGRATION_COLUMNS: Record<string, Set<string>> = {
   sessions: new Set(['adw_name', 'archived']),
   gate_results: new Set(['checks_json']),
   agent_sessions: new Set(['color', 'context_tokens', 'context_window']),
+  // run_queue predates sandboxes; sandbox_id is ALTER-added, so an older db may
+  // lack it. The `sandboxes` table itself ships whole (a hard requirement) EXCEPT
+  // its slice-4 land_* columns, which are ALTER-added over the shipped table.
+  run_queue: new Set(['sandbox_id']),
+  sandboxes: new Set(['land_requested', 'land_result']),
 };
 
 function dbPath(): string {

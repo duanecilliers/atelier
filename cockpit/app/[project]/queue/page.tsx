@@ -3,7 +3,7 @@ import { getDb } from '@/lib/data';
 import { Badge, Dot, Label, type BadgeTone } from '@/components/terminal';
 import { LiveRefresh } from '@/components/LiveRefresh';
 import { LiveElapsed } from '@/components/LiveElapsed';
-import { QueueLauncher } from '@/components/queue/QueueLauncher';
+import { QueueLauncher, type SandboxOption } from '@/components/queue/QueueLauncher';
 import { CancelButton } from '@/components/queue/CancelButton';
 import { ago } from '@/lib/format';
 import { queueSig } from '@/lib/dashboard-signature';
@@ -59,10 +59,23 @@ function loadCatalog(projectId: string): AdwSpec[] {
   }
 }
 
+/** The project's ACTIVE sandboxes — the ones a run can attach to. Empty (and the
+ *  launcher hides its picker) on any read error or a db with none. */
+function loadSandboxes(projectId: string): SandboxOption[] {
+  try {
+    return getDb(projectId)
+      .sandboxes(100, true)
+      .map((s) => ({ id: s.id, branch: s.branch }));
+  } catch {
+    return [];
+  }
+}
+
 export default function QueuePage({ params }: { params: { project: string } }) {
   const now = Date.now();
   const { queue, error } = loadQueue(params.project);
   const catalog = loadCatalog(params.project);
+  const sandboxes = loadSandboxes(params.project);
 
   // Group into lanes once; keep enqueue order within a lane (queue() is id DESC,
   // i.e. newest first — which reads right for a "most recent on top" column).
@@ -105,7 +118,7 @@ export default function QueuePage({ params }: { params: { project: string } }) {
       ) : (
         <>
           <div className="mb-6">
-            <QueueLauncher catalog={catalog} />
+            <QueueLauncher catalog={catalog} sandboxes={sandboxes} />
           </div>
 
           {queue.length === 0 ? (
@@ -187,6 +200,16 @@ function QueueCard({ row, now, projectId }: { row: RunQueueRow; now: number; pro
           {row.agent ? <span className="text-os-muted"> · {row.agent}</span> : null}
         </span>
       </div>
+
+      {row.sandbox_id && (
+        <Link
+          href={projectHref(projectId, '/sandboxes')}
+          className="inline-flex w-fit items-center gap-1 border border-os-border bg-os-surface2 px-1.5 py-[2px] font-mono text-[9.5px] uppercase tracking-[0.12em] text-os-dim hover:text-os-accent"
+          title="This run is bound to a sandbox (isolated worktree)"
+        >
+          ⬡ {row.sandbox_id}
+        </Link>
+      )}
 
       <p className="line-clamp-2 text-[12.5px] text-os-muted" title={row.request ?? ''}>
         {row.request ?? '—'}

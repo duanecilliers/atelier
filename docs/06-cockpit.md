@@ -4,9 +4,9 @@ This doc covers `cockpit/` — the Next.js 14 App Router app that observes and c
 engine. It assumes you've read [README.md](README.md) and [01-architecture.md](01-architecture.md):
 agents propose, deterministic code disposes; the seam is the shared sqlite file
 `engine/adws/adw_data/sssf.db`; the cockpit never spawns a process to run an ADW; the read path
-is readonly by construction; the write surfaces are `run_queue` (via `lib/control.ts`), the
-roster config file (via `lib/roster.ts`), and the `sessions.archived` review flag (via
-`lib/review.ts`). This doc is the mechanics of that half: routes,
+is readonly by construction; the write surfaces are the `run_queue` and `sandboxes` control tables
+(via `lib/control.ts`), the roster config file (via `lib/roster.ts`), and the `sessions.archived`
+review flag (via `lib/review.ts`). This doc is the mechanics of that half: routes,
 the `lib/` layer, the live paths, the design system, and the client/server boundary rules that
 keep it that way.
 
@@ -33,6 +33,7 @@ roster read is scoped to that project's segment. The bare root `/` (`app/page.ts
 | `/[project]/queue` | `app/[project]/queue/page.tsx` | Control-plane Kanban board — 6 lanes (queued/claimed/running/done/failed/canceled), `<QueueLauncher>` at top, `<CancelButton>` per active card. Live via `<LiveRefresh watch="queue">`. `force-dynamic`. | `getDb().queue()` + `readRecipes()` (disk) | via child components, POST `/api/queue`, POST `/api/queue/[id]/cancel` |
 | `/[project]/runs/[adwId]` | `app/[project]/runs/[adwId]/page.tsx` | Run detail — header (+ archive), stat tiles, `<Waterfall>` (proportional phase timeline; clicking a block sets `?phase=` and opens `<PhaseDetail>`: agent config, compiled prompts off disk, per-component cost, phase-scoped gates/outputs/events), agents list, `<ModelStack>`, `<LiveTail>`. With no phase selected, shows the run-wide `<EnvelopePanel>`/`<GatePanel>` instead. `notFound()` if the session doesn't exist. `force-dynamic`. | `getDb().sessionDetail/events/envelopes/gates/runModelStack()` + prompt files (disk, via `lib/prompts.ts`) | archive via POST `/api/runs/[adwId]/archive` |
 | `/[project]/skills` | `app/[project]/skills/page.tsx` | Read-only cookbook — one card per `adw_*.py` recipe, plus `<RecipeBuilder>` composer. `force-dynamic`. | `readRecipes()` (parses `.py` docstrings from disk, not db) | via child component, GET/POST `/api/adws` |
+| `/[project]/sandboxes` | `app/[project]/sandboxes/page.tsx` | Control-plane sandbox list — one card per sandbox (status/branch/tip/worktree/land-result), `<NewSandboxButton>`, and per-active-sandbox `<LandButton>` + `<ShutdownButton>`; "run here →" deep-links an active one into the Conductor. Live via `<LiveRefresh watch="sandboxes">`. `force-dynamic`. | `getDb().sandboxes()` | via child components, POST `/api/sandboxes`, `/api/sandboxes/[id]/land`, `/api/sandboxes/[id]/shutdown` |
 
 > **Note — the waterfall's multi-agent (multi-lane) path is untested against a real trace.**
 > `<Waterfall>` groups phases into one lane per role: `engineer`, `code`, and one per distinct
@@ -50,9 +51,12 @@ roster read is scoped to that project's segment. The bare root `/` (`app/page.ts
 | Route | Method(s) | Purpose | Reads | Writes |
 |---|---|---|---|---|
 | `/api/adws` | GET, POST | ADW builder HTTP face. GET returns the block catalog; POST generates a script (`preview:true` returns source only). **The one write surface that spawns a process** — shells out to `uv run engine/adws/make_adw.py`. | disk (via generator) | new `.py` file in `engine/adws/` (non-preview only) |
-| `/api/dashboard/stream` | GET | List-level SSE. `?watch=runs\|queue`. Pushes `data: {sig}` only when the structural signature changes. Node runtime. Never auto-closes. | `db.sessions()` / `db.queue()` every 300ms tick | none |
+| `/api/dashboard/stream` | GET | List-level SSE. `?watch=runs\|queue\|sandboxes`. Pushes `data: {sig}` only when the structural signature changes. Node runtime. Never auto-closes. | `db.sessions()` / `db.queue()` / `db.sandboxes()` every 300ms tick | none |
 | `/api/queue` | GET, POST | Control seam HTTP face. GET lists `run_queue`; POST enqueues a launch spec. Never spawns anything. | `getDb().queue()` | INSERT into `run_queue` via `getControl().enqueue()` |
 | `/api/queue/[id]/cancel` | POST | Ask a run to stop — cancels an unclaimed row outright, else flips `cancel_requested`. | — | UPDATE `run_queue` via `getControl().requestCancel()` |
+| `/api/sandboxes` | POST | Sandbox control seam — INSERT a `requested` sandbox row (`getControl().createSandbox()`); the worker provisions the worktree. Never spawns anything. | — | INSERT into `sandboxes` |
+| `/api/sandboxes/[id]/land` | POST | Ask the worker to run the sandbox's `land` hook once — flips `land_requested` (only on an `active` sandbox; else 404). | — | UPDATE `sandboxes.land_requested` via `getControl().requestLand()` |
+| `/api/sandboxes/[id]/shutdown` | POST | Ask the worker to tear the sandbox down — flips `shutdown_requested`. | — | UPDATE `sandboxes.shutdown_requested` via `getControl().requestShutdown()` |
 | `/api/roster` | GET, POST, PUT, DELETE | Config seam HTTP face. GET returns roster+warnings; POST patches allowlisted fields; PUT adds an agent + bootstraps its prompt files; DELETE removes one. | `sssf.config.yaml` | `sssf.config.yaml` (atomic temp+rename), + new `system.md`/`user.md` on PUT |
 | `/api/runs/[adwId]/events` | GET | Non-streaming rowid-cursor poll: `?after=<rowid>&limit=` → `{events, cursor, has_more, status}`. Retained for parity with the engine's own visualizer; superseded by the SSE route for the live tail. | `db.events()` + `db.session()` | none |
 | `/api/runs/[adwId]/stream` | GET | Per-run SSE live tail. Resumes from `Last-Event-ID` or `?after=`. Closes when `status !== 'running'`. Node runtime. | `db.events()` + `db.session()` | none |
@@ -118,12 +122,16 @@ Any change to a table in `tracer.py` must be mirrored in both files — see the 
 ### The write surfaces
 
 - `lib/control.ts` — `AtelierControl`, server-only, the **only** write path into `sssf.db`. A
-  separate read-write `better-sqlite3` connection that touches exactly the `run_queue` table:
-  `enqueue()` INSERTs a launch spec (`adw_name` validated against the dynamic on-disk allowlist),
-  `requestCancel()` flips `cancel_requested` unconditionally and, for a still-`queued` row,
-  finishes it outright so no process is ever spawned. `getControl()` memoizes a singleton the
-  same way `getDb()` does. Never writes `sessions/phases/events/envelopes/gates/processes` — only
-  the ADW subprocess itself, via the tracer, writes a run's trace.
+  separate read-write `better-sqlite3` connection that touches exactly the two control tables,
+  `run_queue` and `sandboxes`: `enqueue()` INSERTs a launch spec (`adw_name` validated against the
+  dynamic on-disk allowlist; an optional `sandbox_id` binds the run to a sandbox and is rejected if
+  that sandbox can't host it), `requestCancel()` flips `cancel_requested` unconditionally and, for a
+  still-`queued` row, finishes it outright so no process is ever spawned; `createSandbox()` INSERTs
+  a `requested` sandbox row, and `requestLand()` / `requestShutdown()` flip a sandbox's
+  `land_requested` / `shutdown_requested` flag. Every write is an INSERT or a flag flip — the worker
+  disposes. `getControl()` memoizes a singleton the same way `getDb()` does. Never writes
+  `sessions/phases/events/envelopes/gates/processes` — only the ADW subprocess itself, via the
+  tracer, writes a run's trace.
 - `lib/roster.ts` — server-only, the second write surface: reads/writes the **file**
   `sssf.config.yaml`, not the db. Mirrors the Pydantic models in `data_types.py`
   (`SSSFConfig`/`AgentConfig`/`ConfigDefaults`) as Zod. Writes are surgical byte-range splices
@@ -136,8 +144,8 @@ Any change to a table in `tracer.py` must be mirrored in both files — see the 
   `better-sqlite3` connection that writes exactly one column, `sessions.archived`, which the engine
   schema reserves for the UI ("review triage, set by the UI; never by a run"). Archiving is *reader*
   state — it drops a triaged run out of the review list (the read path already filters
-  `archived = 0`) — so it's isolated from both the readonly reader and `control.ts` (which stays
-  `run_queue`-only), and it never touches a run's trace or acceptance. `getReview()` memoizes a
+  `archived = 0`) — so it's isolated from both the readonly reader and `control.ts` (the control
+  tables only), and it never touches a run's trace or acceptance. `getReview()` memoizes a
   singleton like `getDb()`/`getControl()`; `canArchive` is false on a pre-migration db so the
   writer fails loudly rather than silently no-op'ing.
 

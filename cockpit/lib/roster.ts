@@ -107,11 +107,45 @@ const QualityCheckSchema = z.object({
   operation: z.enum(QUALITY_OPERATIONS).default('build'),
 });
 
+// Mirror of the sandbox profile (data_types.py: SandboxConfig/SandboxProfile/
+// SandboxServices/SandboxLand). Per-project provisioning: a default level plus a
+// named profile per non-trivial level, looked up by the sandbox's level name.
+// NOT covered by pnpm check:contract (it's a config file, not a db table), so
+// keep this in lockstep with the Pydantic models BY HAND (see AGENTS.md).
+const SandboxServicesSchema = z.object({
+  up: z.string().default(''),
+  down: z.string().default(''),
+});
+
+const SandboxLandSchema = z.object({
+  mode: z.enum(['pr', 'merge', 'manual']).default('manual'),
+  cmd: z.string().default(''),
+});
+
+const SandboxProfileSchema = z.object({
+  branch: z.string().default('adw/${SANDBOX_ID}'),
+  setup: z.array(z.string()).default([]),
+  // name → "auto" (the engine probes a free port at provision time).
+  ports: z.record(z.string(), z.string()).default({}),
+  services: SandboxServicesSchema.default({}),
+  env: z.record(z.string(), z.string()).default({}),
+  land: SandboxLandSchema.default({}),
+});
+
+const SandboxConfigSchema = z.object({
+  default: z.string().default('local'),
+  worktree: SandboxProfileSchema.optional(),
+  worktree_env: SandboxProfileSchema.optional(),
+});
+
 export const RosterConfigSchema = z.object({
   defaults: ConfigDefaultsSchema.default({}),
   observability: ObservabilitySchema.default({}),
   // A map of name → command; empty by default. Mirrors SSSFConfig.quality.
   quality: z.record(z.string(), QualityCheckSchema).default({}),
+  // Per-project sandbox provisioning; empty (no `sandbox:` block) = every run is
+  // a local run at REPO_ROOT. Mirrors SSSFConfig.sandbox.
+  sandbox: SandboxConfigSchema.default({}),
   agents: z.array(AgentConfigSchema).default([]),
 });
 

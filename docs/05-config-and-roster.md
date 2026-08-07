@@ -362,6 +362,66 @@ lockstep with `data_types.py` by hand, same discipline as the schema mirror desc
 
 ---
 
+## 8. The `sandbox:` block — isolated workspaces
+
+An optional top-level `sandbox:` block declares **how this project provisions and lands an
+isolated, persistent workspace** — a git worktree on a named branch that hosts one or more runs.
+It is per-project config the **worker** reads (not the cockpit roster editor); the operating model
+— create / attach a run / land / shut down, and the worker's reconcile + reap loop — lives in
+[07-operations.md](07-operations.md#5-sandboxes--isolated-persistent-workspaces). Absent the block,
+every run is `local`: the repo root, byte-identical to today.
+
+```yaml
+sandbox:
+  default: local                 # level a launch uses when it doesn't override
+  worktree_env:                  # a profile, keyed by LEVEL NAME (L2 here)
+    branch: adw/${SANDBOX_ID}    # named branch the worktree checks out (survives teardown)
+    setup:                       # shell commands, run ONCE at create (cwd = the worktree)
+      - pnpm install --frozen-lockfile
+    ports:
+      WEB: auto                  # engine probes a free port → ${WEB}, injected into every run's env
+      DB:  auto
+    services:                    # backing services — mechanism-agnostic shell hooks
+      up:   docker compose -p ${SANDBOX_ID} up -d     # once at create, after setup
+      down: docker compose -p ${SANDBOX_ID} down -v   # at shutdown, before the tree is removed
+    env:
+      DATABASE_URL: postgres://localhost:${DB}/app    # injected into every run in the sandbox
+    land:
+      mode: pr                   # pr | merge | manual
+      cmd:  gh pr create --fill --head ${BRANCH}
+```
+
+| Field | Meaning |
+|---|---|
+| `default` | The level a launch uses when it doesn't pick one. Vocabulary is **bounded** (`local` · `worktree` · `worktree_env`; later `container` · `remote`) — a fixed seam enum shared with the cockpit (`roster-constants.ts`). `local` = no worktree, no sandbox row. *(Note: the create UI currently hardcodes `worktree` and doesn't yet read `default` — see the launcher caveat at the end of this section.)* |
+| `<level>:` | A profile block **keyed by level name** (`worktree_env` above). Declare one per non-`local` level the project uses. |
+| `branch` | The named branch the worktree checks out. It — and its commits — survive teardown in the shared `.git`; shutdown reclaims the working tree, not the work. Charset-validated (git-ref **and** shell-safe) because it interpolates into shell hooks. |
+| `setup` | Shell commands run once at create, `cwd` = the worktree. Warms deps so follow-up runs start instantly against the same tree. |
+| `ports` | `NAME: auto` → the engine probes a free port and exposes `${NAME}` to `setup`/`services`/`env`/`land` **and** injects it into every run's process env, so the app reads the same port its services bound to. Persisted as JSON on the sandbox row. |
+| `services.up` / `.down` | Bring backing services up at create / down at shutdown (and best-effort during orphan reaping). Shell strings — the engine is **mechanism-agnostic** (compose, testcontainers, anything); **no hard Docker dependency**. `-p ${SANDBOX_ID}` makes `down` targetable even after a worker restart. |
+| `env` | Extra process env injected into every run in the sandbox, after interpolation. |
+| `land.mode` | `pr` \| `merge` \| `manual`. `manual` (also the default when `land` is absent) runs nothing — the branch is left for a human. |
+| `land.cmd` | The shell hook for `pr`/`merge`. Its captured stdout (a PR URL / merge summary) is surfaced as the sandbox's `land_result`. A `pr`/`merge` mode with an **empty** `cmd` is a misconfiguration — recorded plainly, not reported as a clean manual land. |
+
+**Interpolation.** `${SANDBOX_ID}`, `${BRANCH}`, and each allocated port name (`${WEB}`, `${DB}`)
+are the only substitutions, available to `setup`, `services`, `env`, and `land`.
+
+**The mirror.** `SSSFConfig.sandbox` (`data_types.py`, Pydantic — `SandboxConfig` / `SandboxProfile`
+/ `SandboxLand`) is mirrored **by hand** in `cockpit/lib/roster.ts` (Zod), with the level vocabulary
+in `roster-constants.ts` (`SANDBOX_LEVELS`). Same discipline as the rest of the config mirror:
+`pnpm check:contract` covers db tables, not this file. Provisioning/landing are per-project; only
+the *level name* is shared seam vocabulary. Determinism is intact — provisioning changes only a
+run's `cwd` and env, so the argv the worker spawns is byte-identical to a `local` run.
+
+> **Launcher caveat (deferred).** `sandbox.default` and `profile.branch` are defined and validated
+> but **not yet consulted by the create path**: the cockpit's "+ New sandbox" hardcodes level
+> `worktree` (L1) and the engine mints `adw/<id>` as the branch. Reading `default`, a level picker,
+> and branch templating belong with the **new-vs-attach launcher** (a future slice). The
+> `worktree_env` engine path is complete — a sandbox whose `level` is set to it (a direct control
+> INSERT, or the future launcher) provisions the full profile.
+
+---
+
 ## Extending this subsystem
 
 - **Add an agent** — via the file (§7) or the cockpit editor's `addAgent()`. Either

@@ -375,6 +375,65 @@ class ObservabilityConfig(BaseModel):
     poll_ms: int = 500
 
 
+# ── Sandbox profile (per-project provisioning) ────────────────────────────────
+# How a project provisions an isolated, persistent workspace — the L2 sandbox in
+# docs/design/sandbox-runs.md. A profile is looked up by the sandbox's LEVEL name
+# (bounded vocab: worktree | worktree_env; `local` needs none). Everything here is
+# DATA the worker acts on at sandbox create/shutdown, never per run: `setup` runs
+# once against a warm tree, `ports` are allocated once, and `env` rides every run.
+# `${SANDBOX_ID}`, `${BRANCH}`, and each allocated port name (`${WEB}`, `${DB}`)
+# interpolate into setup/env/services/land (see adw_modules/provision.py).
+
+
+class SandboxServices(BaseModel):
+    """Project-declared backing-service hooks (slice 3). Shell strings, so a hook
+    wraps `docker compose` / testcontainers / anything — no hard Docker dep."""
+
+    up: str = ""                    # run at sandbox create, after setup
+    down: str = ""                  # run at sandbox shutdown, before worktree remove
+
+
+class SandboxLand(BaseModel):
+    """The project's landing workflow (slice 4) — how a sandbox's branch reaches
+    main. `manual` = leave the branch for a human; the sandbox never lands itself."""
+
+    mode: Literal["pr", "merge", "manual"] = "manual"
+    cmd: str = ""                   # e.g. `gh pr create --fill --head ${BRANCH}`
+
+
+class SandboxProfile(BaseModel):
+    """One level's provisioning recipe. Empty fields = nothing to do for that step,
+    so a bare profile (just a branch) is the L1 worktree with no env."""
+
+    branch: str = "adw/${SANDBOX_ID}"          # the named branch the worktree checks out
+    setup: list[str] = Field(default_factory=list)     # shell commands, run once at create
+    # name -> "auto" (the engine probes a free port) — becomes an env var per run.
+    ports: dict[str, str] = Field(default_factory=dict)
+    services: SandboxServices = Field(default_factory=SandboxServices)
+    # Extra process env for every run in this sandbox; values may reference ${PORT}.
+    env: dict[str, str] = Field(default_factory=dict)
+    land: SandboxLand = Field(default_factory=SandboxLand)
+
+
+class SandboxConfig(BaseModel):
+    """The `sandbox:` block. A default level plus a named profile per non-trivial
+    level. `default: local` (the factory default) is byte-identical to today —
+    a run at REPO_ROOT with no worktree — until a launch overrides the level."""
+
+    default: str = "local"
+    worktree: Optional[SandboxProfile] = None       # L1: worktree only
+    worktree_env: Optional[SandboxProfile] = None   # L2: worktree + deps + ports + env
+
+    def profile_for(self, level: str | None) -> Optional[SandboxProfile]:
+        """The provisioning recipe for a sandbox at `level`, or None when the level
+        provisions nothing (`local`, or a level with no profile declared)."""
+        if level == "worktree_env":
+            return self.worktree_env
+        if level == "worktree":
+            return self.worktree
+        return None
+
+
 class SSSFConfig(BaseModel):
     defaults: ConfigDefaults = Field(default_factory=ConfigDefaults)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
@@ -383,6 +442,9 @@ class SSSFConfig(BaseModel):
     # managed code. See adw_modules/quality.py, which builds its block list from
     # this map instead of hardcoding it.
     quality: dict[str, QualityCheckConfig] = Field(default_factory=dict)
+    # Per-project sandbox provisioning. Default (no `sandbox:` block) provisions
+    # nothing — every run is a local run at REPO_ROOT, exactly as before.
+    sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     agents: list[AgentConfig] = Field(default_factory=list)
 
 

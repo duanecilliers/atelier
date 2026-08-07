@@ -26,6 +26,17 @@ export const QUALITY_OPERATIONS = ['lint', 'typecheck', 'build'] as const;
 export type QualityOperation = (typeof QUALITY_OPERATIONS)[number];
 
 /**
+ * The sandbox isolation-level vocabulary (the ladder in docs/design/sandbox-runs.md).
+ * Bounded on purpose so the level stays a fixed seam enum: `local` is byte-identical
+ * to today (a run at REPO_ROOT); `worktree` is the L1 persistent-worktree sandbox
+ * shipped in slice 1; `worktree_env` (L2: deps + ports + services) lands in slices
+ * 2–3. *Provisioning* and *landing* are per-project config; the level NAME is the
+ * shared vocabulary. Keep in lockstep with engine/adws/adw_modules/sandboxes.py.
+ */
+export const SANDBOX_LEVELS = ['local', 'worktree', 'worktree_env'] as const;
+export type SandboxLevel = (typeof SANDBOX_LEVELS)[number];
+
+/**
  * The builtin pi tool vocabulary. These are the tools every roster names; the
  * claude_code backend maps them 1:1 via agent_cc.TOOL_MAP (read→Read, etc.).
  * Extension tools registered by a `harness_engineering` extension — e.g. the
@@ -49,6 +60,29 @@ export function validateAgentName(name: string): string | null {
   if (n.length > 40) return 'name is too long';
   if (!AGENT_NAME_RE.test(n)) {
     return `"${n}" — lowercase letters, digits, - and _; must start with a letter (it becomes a config key and a directory)`;
+  }
+  return null;
+}
+
+// A sandbox branch name becomes both a git ref AND (via the sandbox profile's
+// ${BRANCH} interpolation) a token spliced into shell setup/services/land
+// commands. Git's own refname rules block spaces and ~^:?*[\ but ALLOW shell
+// metacharacters like ; & | $ ` ( ), so a git-legal branch could still inject a
+// shell command. Restrict to a charset that is safe on both fronts: letters,
+// digits, and - _ . / (the `adw/<id>` shape and ordinary branch names).
+const BRANCH_NAME_RE = /^[A-Za-z0-9._/-]+$/;
+
+/** null if the name is a usable, injection-safe sandbox branch, else a reason. */
+export function validateBranchName(name: string): string | null {
+  const b = name.trim();
+  if (!b) return 'branch is empty';
+  if (b.length > 200) return 'branch is too long';
+  if (!BRANCH_NAME_RE.test(b)) {
+    return `"${b}" — a branch may contain only letters, digits and - _ . / (no shell metacharacters)`;
+  }
+  // git refname rules we also enforce so worktree add can't fail on a name we accepted.
+  if (b.includes('..') || b.startsWith('/') || b.endsWith('/') || b.startsWith('-') || b.endsWith('.lock')) {
+    return `"${b}" — not a valid git branch name`;
   }
   return null;
 }
