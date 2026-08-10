@@ -228,6 +228,7 @@ export function QueueLauncher({
 
           <button
             onClick={launch}
+            aria-label="Launch: enqueue this run for the worker to pick up"
             disabled={busy || !request.trim() || !spec}
             className="rounded-sm-t border border-[var(--accent-line)] bg-[var(--accent-soft)] px-4 py-[7px] font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-os-accent transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40"
           >
