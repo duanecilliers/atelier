@@ -186,6 +186,27 @@ MANAGED for exactly this reason. Other agent harnesses (codex/cursor/pi) don't s
   become that commit's message** - write them as the durable record (the individual branch
   commits do not survive on `main`). Confirm before merging; it is outward-facing.
 
+## Versioning & releases
+
+- **The single version-of-record is `cockpit/package.json`** (`"version"`, SemVer). The engine's
+  `engine/adws/pyproject.toml` is a dev-only shim pinned at `version = "0"` and is **not** a release
+  version - never bump it. There is **no** top-level `VERSION` file and no `CHANGELOG`.
+- **A release is an annotated git tag `vX.Y.Z` on `main`** (`git tag -a`), matching the
+  `cockpit/package.json` version. Tags are **repo-wide**, not cockpit-only: a tag legitimately marks
+  an engine- or config-only change (e.g. `v0.3.0` carried an engine prompt-path fix), even when no
+  cockpit code moved.
+- **Not every PR bumps.** Docs-only and dev-infra PRs ship **untagged** (e.g. the test-gates PR).
+  Bump + tag when a PR changes **user-facing or functional behavior** - a shipped feature or a fix to
+  one. It is a deliberate per-PR call, never automation.
+- **Choosing the number** (pre-1.0, so both stay in `0.x`): **patch** (`0.3.0 -> 0.3.1`) for a bug
+  fix to shipped behavior; **minor** (`0.3.x -> 0.4.0`) for a new feature. When a PR is bugfix-led
+  with a small additive feature riding along, patch is fine - frame by the headline change.
+- **Mechanics under squash-only:** bump `cockpit/package.json` **in the same PR** (a
+  `chore(release): bump to X.Y.Z` commit) so the version lands in the squash commit; `gh pr merge
+  --squash --delete-branch`; then annotate-tag the resulting `main` commit
+  (`git tag -a vX.Y.Z -m "<one-line release summary>"`) and `git push origin vX.Y.Z`. Tagging is
+  outward-facing - confirm first, same as merging.
+
 ## Commit guidelines
 
 When asked to commit, propose a commit strategy:
