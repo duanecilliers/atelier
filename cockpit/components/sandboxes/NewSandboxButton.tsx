@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useProjectId } from '@/lib/use-project';
 import { withProject } from '@/lib/project-url';
+import { validateBranchName } from '@/lib/roster-constants';
 import type { SandboxLaunchOption, ProvisionableSandboxLevel } from '@/lib/roster';
 
 /**
@@ -12,12 +13,16 @@ import type { SandboxLaunchOption, ProvisionableSandboxLevel } from '@/lib/roste
  * a git worktree and flips it to `active`. Optimistic; the real row arrives on the
  * next live refresh.
  *
- * Two operator inputs beyond the level picker:
- *  - purpose (optional) — a human description. When set, the branch is left unset
- *    at create and the worker names it from the purpose via a cheap model
- *    (branch_namer.py) → e.g. `feat/api-rate-limiting`, falling back to `adw/<id>`.
+ * Three operator inputs beyond the level picker, in precedence order:
+ *  - branch (optional) - an EXPLICIT branch name. Wins over everything: the worker
+ *    checks it out verbatim if it already exists (fetch it first to base on origin),
+ *    else forks it off HEAD. Use this for conventions the auto-namer can't produce
+ *    (e.g. `feature/TMU-233_...` - the namer lowercases and only emits feat/fix/…).
+ *  - purpose (optional) - a human description. When set and no branch is given, the
+ *    branch is left unset at create and the worker names it from the purpose via a
+ *    cheap model (branch_namer.py) → e.g. `feat/api-rate-limiting`, `adw/<id>` fallback.
  *  - level — worktree (L1) or worktree_env (L2), preselected from `sandbox.default`.
- * The branch itself is minted server-/worker-side; the button sends only intent.
+ * The button sends only intent; the branch is resolved server-/worker-side.
  */
 export function NewSandboxButton({
   levels,
@@ -32,9 +37,15 @@ export function NewSandboxButton({
   const [error, setError] = useState<string | null>(null);
   const [level, setLevel] = useState<ProvisionableSandboxLevel>(defaultLevel);
   const [purpose, setPurpose] = useState('');
+  const [branch, setBranch] = useState('');
 
   const selected = levels.find((l) => l.level === level) ?? levels[0];
   const trimmedPurpose = purpose.trim();
+  const trimmedBranch = branch.trim();
+  // An explicit branch overrides purpose-based naming (server precedence in
+  // control.ts::createSandbox); validate it inline so a bad name never round-trips.
+  const branchError = trimmedBranch ? validateBranchName(trimmedBranch) : null;
+  const branchActive = trimmedBranch.length > 0;
   // The branch hint: a purpose defers naming to the worker; otherwise preview the
   // level's template (id filled in at create). Only shown when it says something —
   // a purpose, a picker, or a non-default template.
@@ -44,18 +55,23 @@ export function NewSandboxButton({
     (levels.length > 1 || (selected != null && selected.branchTemplate !== 'adw/${SANDBOX_ID}'));
 
   async function create() {
-    if (busy) return;
+    if (busy || branchError) return;
     setBusy(true);
     setError(null);
     try {
+      // Branch wins over purpose, so send one or the other - never a mixed signal.
+      const body = branchActive
+        ? { level, branch: trimmedBranch }
+        : { level, purpose: trimmedPurpose || undefined };
       const res = await fetch(withProject('/api/sandboxes', projectId), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ level, purpose: trimmedPurpose || undefined }),
+        body: JSON.stringify(body),
       });
       const data = (await res.json().catch(() => ({}))) as { id?: string; error?: string };
       if (!res.ok || !data.id) throw new Error(data.error ?? `create failed (${res.status})`);
       setPurpose('');
+      setBranch('');
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -63,6 +79,9 @@ export function NewSandboxButton({
       setBusy(false);
     }
   }
+
+  const inputClass =
+    'rounded-sm-t border border-os-border bg-os-surface2 px-3 py-[7px] font-mono text-[11.5px] text-os-text placeholder:text-os-dim focus:border-[var(--accent-line)] focus:outline-none disabled:opacity-40';
 
   return (
     <div className="flex flex-col gap-2">
@@ -74,11 +93,28 @@ export function NewSandboxButton({
           onKeyDown={(e) => {
             if (e.key === 'Enter') create();
           }}
-          disabled={busy}
+          disabled={busy || branchActive}
           maxLength={500}
           placeholder="what's this sandbox for? (optional)"
           aria-label="Sandbox purpose"
-          className="min-w-[16rem] flex-1 rounded-sm-t border border-os-border bg-os-surface2 px-3 py-[7px] font-mono text-[11.5px] text-os-text placeholder:text-os-dim focus:border-[var(--accent-line)] focus:outline-none disabled:opacity-40"
+          title={branchActive ? 'Ignored while an explicit branch is set' : undefined}
+          className={`min-w-[16rem] flex-1 ${inputClass}`}
+        />
+        <input
+          type="text"
+          value={branch}
+          onChange={(e) => setBranch(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') create();
+          }}
+          disabled={busy}
+          maxLength={200}
+          placeholder="branch (optional, overrides naming)"
+          aria-label="Sandbox branch (explicit override)"
+          spellCheck={false}
+          className={`min-w-[15rem] flex-1 ${inputClass} ${
+            branchError ? 'border-os-err focus:border-os-err' : ''
+          }`}
         />
         {levels.length > 1 && (
           <div className="flex items-center gap-px rounded-sm-t border border-os-border bg-os-border">
@@ -109,7 +145,7 @@ export function NewSandboxButton({
         )}
         <button
           onClick={create}
-          disabled={busy}
+          disabled={busy || !!branchError}
           className="rounded-sm-t border border-[var(--accent-line)] bg-[var(--accent-soft)] px-4 py-[7px] font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-os-accent transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {busy ? 'Requesting…' : '+ New sandbox'}
@@ -120,7 +156,16 @@ export function NewSandboxButton({
           </span>
         )}
       </div>
-      {trimmedPurpose ? (
+      {branchActive ? (
+        branchError ? (
+          <span className="font-mono text-[10.5px] text-os-err">{branchError}</span>
+        ) : (
+          <span className="font-mono text-[10.5px] text-os-dim">
+            uses <span className="text-os-muted">{trimmedBranch}</span> verbatim - checked out if it
+            already exists (fetch it first to base on origin), else created off HEAD
+          </span>
+        )
+      ) : trimmedPurpose ? (
         <span className="font-mono text-[10.5px] text-os-dim">
           branch named from your description at provision (e.g.{' '}
           <span className="text-os-muted">feat/…</span>)

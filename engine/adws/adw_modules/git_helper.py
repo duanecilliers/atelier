@@ -45,6 +45,16 @@ def repo_root() -> Path:
     return Path.cwd().resolve()
 
 
+def git_common_dir() -> Path:
+    """Absolute path to the git common dir - the ONE shared `.git` all worktrees
+    point at. For a normal checkout this is `<root>/.git`; for a linked worktree
+    (including a bare-repo worktree layout) it is the shared git dir, e.g.
+    `…/tmu.git`. Resolved absolute so callers can derive a stable per-repo identity
+    from it regardless of which working tree they run in."""
+    raw = Path(_git("rev-parse", "--git-common-dir"))
+    return raw.resolve() if raw.is_absolute() else (Path.cwd() / raw).resolve()
+
+
 def commit_all(message: str) -> str:
     """Stage the working tree and commit it. Returns the new short sha."""
     if not is_repo():

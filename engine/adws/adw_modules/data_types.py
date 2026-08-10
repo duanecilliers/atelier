@@ -435,6 +435,13 @@ class SandboxConfig(BaseModel):
     a run at REPO_ROOT with no worktree — until a launch overrides the level."""
 
     default: str = "local"
+    # Names the worktrees namespace ~/.atelier/worktrees/<project_name>/. Optional:
+    # when unset the worker derives it from the repo's git identity (so a bare-repo
+    # worktree layout like `tmu.git/master` namespaces as `tmu`, not the working-tree
+    # name `master`). Set it to pin an explicit, collision-free name per project -
+    # two projects whose working tree is named `master`/`main` would otherwise share
+    # a worktrees dir.
+    project_name: Optional[str] = None
     namer: SandboxNamer = Field(default_factory=SandboxNamer)  # human-readable branch names from `purpose`
     worktree: Optional[SandboxProfile] = None       # L1: worktree only
     worktree_env: Optional[SandboxProfile] = None   # L2: worktree + deps + ports + env

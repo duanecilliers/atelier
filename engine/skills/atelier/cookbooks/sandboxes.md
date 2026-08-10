@@ -59,12 +59,19 @@ intent — no page ever spawns a process.
 
 - **Create** — **+ New sandbox** POSTs `/api/sandboxes`, which INSERTs a `requested` row. The next
   `just worker` poll provisions the worktree and flips it to `active`. (By hand: INSERT a
-  `sandboxes` row via `AtelierControl.createSandbox` — same write path.) The create form takes an
-  optional **purpose** ("what's this sandbox for?"): with a purpose and no explicit branch, the row
-  is created with `branch` NULL and the **worker names the branch from the purpose** at provision
-  via a cheap model (`sandbox.namer`, default Haiku) → e.g. `feat/api-rate-limiting`, falling back
-  to `adw/<id>`. The card shows `naming…` until it lands. See `sandbox.namer` in
-  [references/config.md](../references/config.md#sandbox).
+  `sandboxes` row via `AtelierControl.createSandbox` - same write path.) The create form has two
+  optional inputs, in precedence order:
+  1. **branch** - an explicit branch name, used verbatim (the worker checks it out if it already
+     exists, else forks it off HEAD). Wins over purpose. Use it for conventions the namer can't
+     produce (it lowercases and only emits `feat/fix/chore/docs`), e.g. `feature/TMU-233_...`. The
+     field validates inline against the same charset as `validateBranchName`.
+  2. **purpose** ("what's this sandbox for?") - with a purpose and **no** branch, the row is created
+     with `branch` NULL and the **worker names the branch from the purpose** at provision via a
+     cheap model (`sandbox.namer`, default Haiku) → e.g. `feat/api-rate-limiting`, falling back to
+     `adw/<id>`. The card shows `naming…` until it lands.
+
+  With neither, the branch comes from the level's `branch` template (default `adw/${SANDBOX_ID}`).
+  See `sandbox.namer` in [references/config.md](../references/config.md#sandbox).
 - **Attach a run** — from an `active` sandbox card, **run here →** links to the Conductor
   (`/<project>/queue`). Enqueuing with a `sandbox_id` binds the run to that sandbox; the worker
   spawns it with `cwd=<worktree>` and `SSSF_TRACE_ROOT=REPO_ROOT`, so **its trace still lands in
@@ -90,7 +97,9 @@ intent — no page ever spawns a process.
   worktree) — shutdown reclaims the working tree, not the work.
 
 Worktrees live **outside the repo** at `~/.atelier/worktrees/<project>/<sandbox-id>` (no
-`.gitignore` churn; `git rev-parse --show-toplevel` still resolves inside them). The provision /
+`.gitignore` churn; `git rev-parse --show-toplevel` still resolves inside them). `<project>` is
+`sandbox.project_name` when set, else the repo's git-common-dir identity (so a bare-repo/worktree
+layout namespaces by the shared repo name, not the working-tree basename). The provision /
 services / land hooks log **beside** the worktree at `<sandbox-id>.provision.log` — never inside
 it, so provision artifacts never surface as untracked files in the sandbox's own diff.
 

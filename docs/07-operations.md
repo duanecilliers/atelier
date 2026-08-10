@@ -270,8 +270,10 @@ worktree, where the cockpit can't see it. So the worker sets `SSSF_TRACE_ROOT=RE
 engine absolutizes the db/JSONL/session paths against it — the trace still lands in the shared
 `sssf.db`. A non-sandboxed run leaves the signal unset → everything resolves against `cwd` as
 before → **byte-identical**. Worktrees live **outside the repo** at
-`~/.atelier/worktrees/<project>/<sandbox-id>`; the provision/services/land hooks log **beside**
-the tree at `<sandbox-id>.provision.log`, never inside it.
+`~/.atelier/worktrees/<project>/<sandbox-id>` (`<project>` = `sandbox.project_name`, else the
+repo's git-common-dir identity - so a bare-repo/worktree layout namespaces by the shared repo name,
+not the working-tree basename); the provision/services/land hooks log **beside** the tree at
+`<sandbox-id>.provision.log`, never inside it.
 
 ### Reconcile + reap (extends the `drain()` loop in §3)
 

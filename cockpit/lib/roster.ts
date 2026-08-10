@@ -142,6 +142,10 @@ const SandboxNamerSchema = z.object({
 
 const SandboxConfigSchema = z.object({
   default: z.string().default('local'),
+  // Names the worktrees namespace (~/.atelier/worktrees/<project_name>/). Optional:
+  // when unset the worker derives it from the repo's git identity so a bare-repo
+  // worktree layout namespaces as e.g. `tmu` rather than the working-tree name.
+  project_name: z.string().optional(),
   namer: SandboxNamerSchema.default({}),
   worktree: SandboxProfileSchema.optional(),
   worktree_env: SandboxProfileSchema.optional(),

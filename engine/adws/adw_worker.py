@@ -128,10 +128,57 @@ class Job:
 WORKTREES_ROOT = Path.home() / ".atelier" / "worktrees"
 
 
+def _sanitize_slug(name: str) -> str:
+    """A filesystem-safe single path segment: collapse anything but `[A-Za-z0-9._-]`
+    to `-` and trim, so a config-supplied project_name can never escape the worktrees
+    root or nest dirs. Falls back to a sanitized REPO_ROOT.name (then the literal
+    `sandbox`) when the input sanitizes to empty, so the result is always a clean
+    single segment."""
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", name.strip()).strip("-.")
+    if cleaned:
+        return cleaned
+    fallback = re.sub(r"[^A-Za-z0-9._-]+", "-", REPO_ROOT.name).strip("-.")
+    return fallback or "sandbox"
+
+
+def _default_project_slug() -> str:
+    """The worktrees-namespace name when `sandbox.project_name` is unset. Prefer the
+    git COMMON dir's identity so a bare-repo/worktree layout (`tmu.git/master`)
+    namespaces as `tmu` rather than the working-tree basename `master`; for the MAIN
+    checkout of a normal repo this equals REPO_ROOT.name (unchanged). A linked
+    worktree of a normal repo now namespaces by the shared repo name too, not its own
+    dir name - intentional: worktrees of one repo share a namespace."""
+    try:
+        common = git_helper.git_common_dir()
+        name = common.parent.name if common.name == ".git" else common.name
+    except Exception:
+        name = REPO_ROOT.name
+    if name.endswith(".git"):
+        name = name[:-4]
+    return _sanitize_slug(name)
+
+
+# The worktrees namespace segment. Seeded from the repo's git identity at import;
+# an explicit sandbox.project_name overrides it at startup (set_project_slug, run
+# after load_config in both drain() and main()).
+PROJECT_SLUG = _default_project_slug()
+
+
+def set_project_slug(sandbox_cfg: SandboxConfig) -> None:
+    """Resolve the worktrees namespace once at startup: an explicit
+    sandbox.project_name wins, else the git-derived default. Idempotent, so calling
+    it in both drain() and the startup-reap path is safe."""
+    global PROJECT_SLUG
+    PROJECT_SLUG = (_sanitize_slug(sandbox_cfg.project_name)
+                    if sandbox_cfg.project_name else _default_project_slug())
+
+
 def worktree_path_for(sandbox_id: str) -> Path:
     """Where this worker puts a sandbox's worktree: ~/.atelier/worktrees/<project>/<id>.
-    Namespaced by REPO_ROOT's name so two projects' sandboxes never collide."""
-    return WORKTREES_ROOT / REPO_ROOT.name / sandbox_id
+    Namespaced by PROJECT_SLUG (sandbox.project_name, else the repo's git identity) so
+    two projects' sandboxes never collide - even two whose working tree is named
+    `master`/`main`."""
+    return WORKTREES_ROOT / PROJECT_SLUG / sandbox_id
 
 
 def provision_log_path(sandbox_id: str) -> Path:
@@ -461,6 +508,7 @@ def sandbox_run_env(sb: sqlite3.Row, sandbox_cfg: SandboxConfig) -> dict[str, st
 def drain(conn: sqlite3.Connection, config: str, concurrency: int, poll: float,
           once: bool, host: str, pid: int, started_at: str) -> None:
     cfg = agents.load_config(config)
+    set_project_slug(cfg.sandbox)
     data_dir = cfg.defaults.data_dir
     jobs: dict[int, Job] = {}
     # Signal state. The handler ONLY sets flags — never does I/O or kills — because
@@ -754,6 +802,7 @@ def main() -> int:
 
     host, pid = workers.identity()
     cfg = agents.load_config(args.config)
+    set_project_slug(cfg.sandbox)  # before the startup reap resolves worktree paths
     conn = connect(cfg.observability.db)
     # One try/finally around the whole connection lifetime, so a throw in
     # ensure_schema can't leak the connection (and its WAL handle).
