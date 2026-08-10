@@ -95,13 +95,18 @@ def validate(cfg: SSSFConfig, required: list[str]) -> None:
             problems.append(f"agent {name!r}: coding_agent {agent.coding_agent!r} "
                             f"is not supported (use 'pi' or 'claude_code')")
         # Prompt files are config assets in the adws/adw_data tree, not the
-        # execution surface — under a sandbox run cwd is the worktree (which need
+        # execution surface - under a sandbox run cwd is the worktree (which need
         # not even contain adws/), so anchor them at trace_root() like the sink,
         # NOT at cwd. Unset SSSF_TRACE_ROOT (every CLI run) → cwd, unchanged.
         for label, ref in (("system", agent.prompt_engineering.system),
                            ("user", agent.prompt_engineering.user)):
-            if not resolve_trace_path(ref).is_file():
-                problems.append(f"agent {name!r}: {label} prompt not found: {ref}")
+            resolved = resolve_trace_path(ref)
+            if not resolved.is_file():
+                # Show the resolved path too: under a sandbox run it is anchored at
+                # SSSF_TRACE_ROOT, so a bare `ref` looks present in the repo and hides
+                # where we actually looked.
+                extra = "" if str(resolved) == ref else f" (looked at {resolved})"
+                problems.append(f"agent {name!r}: {label} prompt not found: {ref}{extra}")
         # pi models must resolve against pi's catalog now; claude_code models are
         # validated by the SDK at call time, so we only sanity-check the provider.
         if agent.coding_agent == "pi":
@@ -130,7 +135,7 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
         "previous_envelope": call.previous.model_dump_json(indent=2) if call.previous else "(none)",
         "context_handoff_dir": str(run.context_handoff_dir),
     }
-    # Anchor prompt reads at trace_root() (SSSF_TRACE_ROOT or cwd) — see validate():
+    # Anchor prompt reads at trace_root() (SSSF_TRACE_ROOT or cwd) - see validate():
     # a sandbox run's cwd is the worktree, but the roster's prompt assets live in the
     # real repo's adws/adw_data tree, exactly where the trace sink is.
     system_text = prompts.render(resolve_trace_path(agent.prompt_engineering.system), variables)

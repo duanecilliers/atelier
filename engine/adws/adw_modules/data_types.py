@@ -438,7 +438,7 @@ class SandboxConfig(BaseModel):
     # Names the worktrees namespace ~/.atelier/worktrees/<project_name>/. Optional:
     # when unset the worker derives it from the repo's git identity (so a bare-repo
     # worktree layout like `tmu.git/master` namespaces as `tmu`, not the working-tree
-    # name `master`). Set it to pin an explicit, collision-free name per project —
+    # name `master`). Set it to pin an explicit, collision-free name per project -
     # two projects whose working tree is named `master`/`main` would otherwise share
     # a worktrees dir.
     project_name: Optional[str] = None

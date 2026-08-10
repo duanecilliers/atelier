@@ -271,7 +271,7 @@ engine absolutizes the db/JSONL/session paths against it — the trace still lan
 `sssf.db`. A non-sandboxed run leaves the signal unset → everything resolves against `cwd` as
 before → **byte-identical**. Worktrees live **outside the repo** at
 `~/.atelier/worktrees/<project>/<sandbox-id>` (`<project>` = `sandbox.project_name`, else the
-repo's git-common-dir identity — so a bare-repo/worktree layout namespaces by the shared repo name,
+repo's git-common-dir identity - so a bare-repo/worktree layout namespaces by the shared repo name,
 not the working-tree basename); the provision/services/land hooks log **beside** the tree at
 `<sandbox-id>.provision.log`, never inside it.
 

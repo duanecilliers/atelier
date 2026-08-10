@@ -131,16 +131,23 @@ WORKTREES_ROOT = Path.home() / ".atelier" / "worktrees"
 def _sanitize_slug(name: str) -> str:
     """A filesystem-safe single path segment: collapse anything but `[A-Za-z0-9._-]`
     to `-` and trim, so a config-supplied project_name can never escape the worktrees
-    root or nest dirs. Falls back to REPO_ROOT.name if it sanitizes to empty."""
+    root or nest dirs. Falls back to a sanitized REPO_ROOT.name (then the literal
+    `sandbox`) when the input sanitizes to empty, so the result is always a clean
+    single segment."""
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", name.strip()).strip("-.")
-    return cleaned or REPO_ROOT.name
+    if cleaned:
+        return cleaned
+    fallback = re.sub(r"[^A-Za-z0-9._-]+", "-", REPO_ROOT.name).strip("-.")
+    return fallback or "sandbox"
 
 
 def _default_project_slug() -> str:
     """The worktrees-namespace name when `sandbox.project_name` is unset. Prefer the
     git COMMON dir's identity so a bare-repo/worktree layout (`tmu.git/master`)
-    namespaces as `tmu` rather than the working-tree basename `master`; for a normal
-    checkout this equals REPO_ROOT.name (behavior unchanged)."""
+    namespaces as `tmu` rather than the working-tree basename `master`; for the MAIN
+    checkout of a normal repo this equals REPO_ROOT.name (unchanged). A linked
+    worktree of a normal repo now namespaces by the shared repo name too, not its own
+    dir name - intentional: worktrees of one repo share a namespace."""
     try:
         common = git_helper.git_common_dir()
         name = common.parent.name if common.name == ".git" else common.name
@@ -169,7 +176,7 @@ def set_project_slug(sandbox_cfg: SandboxConfig) -> None:
 def worktree_path_for(sandbox_id: str) -> Path:
     """Where this worker puts a sandbox's worktree: ~/.atelier/worktrees/<project>/<id>.
     Namespaced by PROJECT_SLUG (sandbox.project_name, else the repo's git identity) so
-    two projects' sandboxes never collide — even two whose working tree is named
+    two projects' sandboxes never collide - even two whose working tree is named
     `master`/`main`."""
     return WORKTREES_ROOT / PROJECT_SLUG / sandbox_id
 

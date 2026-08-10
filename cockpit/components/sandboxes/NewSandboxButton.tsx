@@ -14,11 +14,11 @@ import type { SandboxLaunchOption, ProvisionableSandboxLevel } from '@/lib/roste
  * next live refresh.
  *
  * Three operator inputs beyond the level picker, in precedence order:
- *  - branch (optional) — an EXPLICIT branch name. Wins over everything: the worker
+ *  - branch (optional) - an EXPLICIT branch name. Wins over everything: the worker
  *    checks it out verbatim if it already exists (fetch it first to base on origin),
  *    else forks it off HEAD. Use this for conventions the auto-namer can't produce
- *    (e.g. `feature/TMU-233_...` — the namer lowercases and only emits feat/fix/…).
- *  - purpose (optional) — a human description. When set and no branch is given, the
+ *    (e.g. `feature/TMU-233_...` - the namer lowercases and only emits feat/fix/…).
+ *  - purpose (optional) - a human description. When set and no branch is given, the
  *    branch is left unset at create and the worker names it from the purpose via a
  *    cheap model (branch_namer.py) → e.g. `feat/api-rate-limiting`, `adw/<id>` fallback.
  *  - level — worktree (L1) or worktree_env (L2), preselected from `sandbox.default`.
@@ -59,7 +59,7 @@ export function NewSandboxButton({
     setBusy(true);
     setError(null);
     try {
-      // Branch wins over purpose, so send one or the other — never a mixed signal.
+      // Branch wins over purpose, so send one or the other - never a mixed signal.
       const body = branchActive
         ? { level, branch: trimmedBranch }
         : { level, purpose: trimmedPurpose || undefined };
@@ -161,7 +161,7 @@ export function NewSandboxButton({
           <span className="font-mono text-[10.5px] text-os-err">{branchError}</span>
         ) : (
           <span className="font-mono text-[10.5px] text-os-dim">
-            uses <span className="text-os-muted">{trimmedBranch}</span> verbatim — checked out if it
+            uses <span className="text-os-muted">{trimmedBranch}</span> verbatim - checked out if it
             already exists (fetch it first to base on origin), else created off HEAD
           </span>
         )

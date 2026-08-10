@@ -46,7 +46,7 @@ def repo_root() -> Path:
 
 
 def git_common_dir() -> Path:
-    """Absolute path to the git common dir — the ONE shared `.git` all worktrees
+    """Absolute path to the git common dir - the ONE shared `.git` all worktrees
     point at. For a normal checkout this is `<root>/.git`; for a linked worktree
     (including a bare-repo worktree layout) it is the shared git dir, e.g.
     `…/tmu.git`. Resolved absolute so callers can derive a stable per-repo identity
