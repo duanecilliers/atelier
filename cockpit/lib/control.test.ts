@@ -61,6 +61,17 @@ describe('createSandbox branch precedence', () => {
     expect(sb.purpose).toBe('do a thing');
   });
 
+  it('an explicit branch plus a purpose records both (branch wins naming)', () => {
+    const { id } = ctl.createSandbox({
+      level: 'worktree',
+      branch: 'feature/PROJ-1_x',
+      purpose: 'do a thing',
+    });
+    const sb = ctl.getSandbox(id)!;
+    expect(sb.branch).toBe('feature/PROJ-1_x');
+    expect(sb.purpose).toBe('do a thing');
+  });
+
   it('neither -> the level template is interpolated now', () => {
     const { id } = ctl.createSandbox({ level: 'worktree' }, 'adw/${SANDBOX_ID}');
     expect(ctl.getSandbox(id)!.branch).toBe(`adw/${id}`);
