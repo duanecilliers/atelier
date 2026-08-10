@@ -41,7 +41,7 @@ Respond with ONLY valid JSON matching `PlanOutput` — no prose before or after:
   "status": "success",
   "summary": "<one sentence describing the plan>",
   "artifacts": ["<context_handoff_dir>/plan.md", "<repo_root>/specs/<adw_id>_<slug>.md"],
-  "commit_message": "<imperative one-line git subject for committing THIS PLAN DOCUMENT, not the work it describes — e.g. 'Add spec for the /health endpoint'>",
+  "commit_message": "<the full git commit message for committing THIS PLAN DOCUMENT (not the work it describes), as one JSON string with newlines: a subject following the repository's commit convention (see the project guidance in your instructions — e.g. `docs(spec): add /health endpoint plan` when the project uses Conventional Commits), a blank line, then a short body. A sandbox that lands derives its PR title and description from this>",
   "notes_for_next_agent": "<what the builder must know>"
 }
 ```
