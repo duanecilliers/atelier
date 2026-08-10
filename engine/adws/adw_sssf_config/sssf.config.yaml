@@ -79,6 +79,9 @@ sandbox:
     model: anthropic/claude-haiku-4-5
   worktree_env:                       # L2: worktree + deps + ports + env
     branch: adw/${SANDBOX_ID}         # named branch the worktree checks out (survives teardown)
+    land:
+      mode: pr
+      cmd: git push -u origin ${BRANCH} && gh pr create --fill --head ${BRANCH} --base main
     setup:                            # shell commands, run once at create (cwd = the worktree)
       - pnpm --dir cockpit install --prefer-offline   # warm the cockpit deps for this sandbox
     ports:
