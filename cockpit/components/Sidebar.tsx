@@ -27,7 +27,7 @@ function NavGroup({
       <div className="px-2.5 pb-1.5 pt-3.5 font-mono text-[9px] uppercase tracking-[0.18em] text-os-dim">
         {title}
       </div>
-      {items.map(({ href, label, icon: Icon, live }) => {
+      {items.map(({ href, label, icon: Icon, description, live }) => {
         const target = projectHref(projectId, href);
         // Active when the path is this view or a child of it. The project root
         // (href '/') must match ONLY the exact project path, never every child.
@@ -36,6 +36,7 @@ function NavGroup({
           <Link
             key={href}
             href={target}
+            title={description}
             className={`flex items-center gap-2.5 rounded-sm-t border px-2.5 py-[7px] text-[13.5px] font-medium transition-colors ${
               active
                 ? 'border-[var(--accent-line)] bg-[var(--accent-soft)] text-os-accent'

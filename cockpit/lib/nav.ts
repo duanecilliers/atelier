@@ -21,25 +21,71 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
-export type NavItem = { href: string; label: string; icon: LucideIcon; live?: boolean };
+export type NavItem = {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+  description: string;
+  live?: boolean;
+};
 
 // The runs and the queue that feeds them.
 export const NAV_OPERATE: NavItem[] = [
-  { href: '/', label: 'Runs', icon: Activity, live: true },
-  { href: '/queue', label: 'Queue', icon: ListChecks, live: true }, // Phase 2 — control plane
-  { href: '/sandboxes', label: 'Sandboxes', icon: Boxes, live: true }, // Phase 5 — isolated persistent workspaces
+  {
+    href: '/',
+    label: 'Runs',
+    icon: Activity,
+    description: 'All ADW runs - live and historical traces',
+    live: true,
+  },
+  {
+    href: '/queue',
+    label: 'Queue',
+    icon: ListChecks,
+    description: 'Launch queue - runs waiting for the worker',
+    live: true,
+  }, // Phase 2 — control plane
+  {
+    href: '/sandboxes',
+    label: 'Sandboxes',
+    icon: Boxes,
+    description: 'Isolated worktree workspaces hosting runs',
+    live: true,
+  }, // Phase 5 — isolated persistent workspaces
 ];
 
 // The factory: the agents that propose and the skills they draw on.
 export const NAV_FACTORY: NavItem[] = [
-  { href: '/agents', label: 'Agents', icon: Bot, live: true }, // Phase 4 — roster view + editor
-  { href: '/skills', label: 'Skills', icon: Sparkles, live: true }, // Phase 4 — cookbook (read-only)
+  {
+    href: '/agents',
+    label: 'Agents',
+    icon: Bot,
+    description: 'The roster - configured agents and their models',
+    live: true,
+  }, // Phase 4 — roster view + editor
+  {
+    href: '/skills',
+    label: 'Skills',
+    icon: Sparkles,
+    description: 'Skill cookbooks the agents draw on',
+    live: true,
+  }, // Phase 4 — cookbook (read-only)
 ];
 
 // How you measure it: the deterministic gates and what each run cost.
 export const NAV_OBSERVE: NavItem[] = [
-  { href: '/gates', label: 'Gates', icon: ShieldCheck }, // Phase 3
-  { href: '/cost', label: 'Cost', icon: Receipt }, // Phase 3
+  {
+    href: '/gates',
+    label: 'Gates',
+    icon: ShieldCheck,
+    description: 'Deterministic acceptance checks per run',
+  }, // Phase 3
+  {
+    href: '/cost',
+    label: 'Cost',
+    icon: Receipt,
+    description: 'Token and dollar spend per run and agent',
+  }, // Phase 3
 ];
 
 /** Visible top-to-bottom order across all groups. */
