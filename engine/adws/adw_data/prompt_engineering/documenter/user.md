@@ -44,7 +44,7 @@ Respond with ONLY valid JSON matching `DocumentOutput` — no prose before or af
   "document_path": "<repo_root>/app_docs/<adw_id>_<slug>.md",
   "documented_files": ["src/server.ts"],
   "artifacts": ["<context_handoff_dir>/document.md", "<repo_root>/app_docs/<adw_id>_<slug>.md"],
-  "commit_message": "<imperative one-line git subject for committing THIS WRITE-UP, not the change it describes — e.g. 'Document the /health endpoint'>",
+  "commit_message": "<the full git commit message for committing THIS WRITE-UP (not the change it describes), as one JSON string with newlines: a subject following the repository's commit convention (see the project guidance in your instructions — e.g. `docs: document the /health endpoint` when the project uses Conventional Commits), a blank line, then a short body. A sandbox that lands derives its PR title and description from this>",
   "notes_for_next_agent": "<anything the diff left unexplained>"
 }
 ```

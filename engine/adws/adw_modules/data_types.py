@@ -83,16 +83,22 @@ class GenericOutput(EnvelopeBase):
 
 
 class PlanOutput(EnvelopeBase):
-    # Subject for committing the PLAN — the spec file the planner wrote, not the
-    # implementation it describes. Each agent's commit_message covers its own
-    # work product, so a chain that commits per step never reuses one agent's
-    # words for another agent's diff.
+    # Full commit message (subject + body) for committing the PLAN — the spec file
+    # the planner wrote, not the implementation it describes. Each agent's
+    # commit_message covers its own work product, so a chain that commits per step
+    # never reuses one agent's words for another agent's diff. The subject follows
+    # the repository's commit convention; a sandbox that lands derives its PR
+    # title + description from this message via `gh pr create --fill`.
     commit_message: str = ""
 
 
 class BuildOutput(EnvelopeBase):
     changed_files: list[str] = Field(default_factory=list)
-    commit_message: str = ""        # consumed by the git commit phase
+    # Full commit message (subject line in the repo's commit convention, blank
+    # line, body). Consumed by the git commit phase; `git commit -m` preserves the
+    # newlines, so a landed sandbox PR gets its title from the subject and its
+    # description from the body (`gh pr create --fill`). A bare subject -> no PR body.
+    commit_message: str = ""
 
 
 class ScoutFinding(BaseModel):
@@ -125,7 +131,7 @@ class DocumentOutput(EnvelopeBase):
 
     document_path: str = ""         # the doc in the repo, e.g. app_docs/<adw_id>_<slug>.md
     documented_files: list[str] = Field(default_factory=list)
-    commit_message: str = ""
+    commit_message: str = ""        # full message (subject in the repo's convention + body); feeds the commit and a landed PR's title/description
 
 
 # ── Deterministic quality blocks ─────────────────────────────────────────────

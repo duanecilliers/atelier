@@ -32,11 +32,11 @@ class GenericOutput(EnvelopeBase):
     """Fallback for an agent with no sharper contract yet."""
 
 class PlanOutput(EnvelopeBase):
-    commit_message: str = ""            # imperative git subject for the PLAN FILE itself
+    commit_message: str = ""            # full message (subject in the repo's convention + body) for the PLAN FILE itself
 
 class BuildOutput(EnvelopeBase):
     changed_files: list[str] = []
-    commit_message: str = ""            # consumed by the git commit phase
+    commit_message: str = ""            # full message (subject + body); feeds the commit phase and a landed PR's title/description
 
 class ScoutOutput(EnvelopeBase):
     findings: list[ScoutFinding] = []   # ScoutFinding: {file: str, note: str}
@@ -55,6 +55,8 @@ class DocumentOutput(EnvelopeBase):
 `commit_message` defaults to empty, so a git phase consuming it always needs a fallback — see `cookbooks/create_adw.md`.
 
 **Each `commit_message` describes its own agent's work product, never the next one's**: `PlanOutput`'s covers the spec file, `BuildOutput`'s the code, `DocumentOutput`'s the write-up. A chain that commits once can use whichever fits; a chain that commits per step (`adw_simple_sdlc.py`) needs all three, and reusing one agent's sentence for another's diff is how a commit log starts lying.
+
+**It is a full message, not a bare subject.** The agent writes a subject line in the *repository's* commit convention (from the injected project guidance — Conventional Commits where the project uses them) plus a blank line and a short body. `git commit -m` keeps the newlines, so when a sandbox lands via `gh pr create --fill`, the subject becomes the PR title and the body its description. A one-line `commit_message` therefore lands a PR with a non-conventional title and no description — the fix is the message, not the land hook.
 
 There is no test output type: running the suite is a `kind="code"` phase, and its `QualityResult` reaches the next agent through `quality.as_envelope`.
 
