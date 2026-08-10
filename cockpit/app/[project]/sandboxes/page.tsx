@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { getDb } from '@/lib/data';
 import { Badge, Dot, type BadgeTone } from '@/components/terminal';
 import { LiveRefresh } from '@/components/LiveRefresh';
+import { CopyBranchButton } from '@/components/sandboxes/CopyBranchButton';
 import { NewSandboxButton } from '@/components/sandboxes/NewSandboxButton';
 import { ShutdownButton } from '@/components/sandboxes/ShutdownButton';
 import { LandButton } from '@/components/sandboxes/LandButton';
@@ -130,9 +131,15 @@ function SandboxCard({ sb, now, projectId }: { sb: Sandbox; now: number; project
           </Row>
         )}
         <Row term="branch">
-          {sb.branch ?? (
-            // Null branch + still provisioning → the worker is naming it from `purpose`.
-            terminal ? '—' : <span className="text-os-dim">naming…</span>
+          {sb.branch ? (
+            <span className="flex items-center gap-2">
+              <span className="min-w-0 break-all">{sb.branch}</span>
+              <CopyBranchButton branch={sb.branch} />
+            </span>
+          ) : terminal ? (
+            '—'
+          ) : (
+            <span className="text-os-dim">naming…</span>
           )}
         </Row>
         <Row term="tip">{sb.tip_sha ?? <span className="text-os-dim">— no runs yet</span>}</Row>
