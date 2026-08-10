@@ -143,8 +143,8 @@ def _sanitize_slug(name: str) -> str:
 
 def _default_project_slug() -> str:
     """The worktrees-namespace name when `sandbox.project_name` is unset. Prefer the
-    git COMMON dir's identity so a bare-repo/worktree layout (`tmu.git/master`)
-    namespaces as `tmu` rather than the working-tree basename `master`; for the MAIN
+    git COMMON dir's identity so a bare-repo/worktree layout (`acme.git/master`)
+    namespaces as `acme` rather than the working-tree basename `master`; for the MAIN
     checkout of a normal repo this equals REPO_ROOT.name (unchanged). A linked
     worktree of a normal repo now namespaces by the shared repo name too, not its own
     dir name - intentional: worktrees of one repo share a namespace."""

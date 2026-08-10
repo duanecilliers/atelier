@@ -17,7 +17,7 @@ import type { SandboxLaunchOption, ProvisionableSandboxLevel } from '@/lib/roste
  *  - branch (optional) - an EXPLICIT branch name. Wins over everything: the worker
  *    checks it out verbatim if it already exists (fetch it first to base on origin),
  *    else forks it off HEAD. Use this for conventions the auto-namer can't produce
- *    (e.g. `feature/TMU-233_...` - the namer lowercases and only emits feat/fix/…).
+ *    (e.g. `feature/PROJ-233_...` - the namer lowercases and only emits feat/fix/…).
  *  - purpose (optional) - a human description. When set and no branch is given, the
  *    branch is left unset at create and the worker names it from the purpose via a
  *    cheap model (branch_namer.py) → e.g. `feat/api-rate-limiting`, `adw/<id>` fallback.
