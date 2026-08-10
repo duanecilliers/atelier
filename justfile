@@ -25,6 +25,17 @@ demo:
     uv run engine/adws/adw_scout.py --config {{config}} "list the top-level directories in this repo and what each is for. change nothing."
     @echo "\nboth done. now run:  just sessions    (or: cd cockpit && pnpm dev)"
 
+# ── quality gates ─────────────────────────────────────────────────────────
+# The deterministic gates: engine pytest (adw_modules + make_adw), cockpit vitest
+# (reader/control/roster logic), and the two static seam-mirror parity checks
+# (roster.ts<->data_types.py, engine DDL<->schemas.ts). Fast, offline, no model
+# calls, no live db. This is the pre-PR / CI gate.
+test:
+    uv run --project engine/adws pytest engine/adws/tests -q
+    cd cockpit && pnpm test:run
+    cd cockpit && pnpm check:mirror
+    cd cockpit && pnpm check:types
+
 # ── run a workflow ──────────────────────────────────────────────────────────
 # Args pass straight through: "<prompt or path/to/prompt.md>" [--adw-id X]
 

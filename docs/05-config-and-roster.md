@@ -72,8 +72,16 @@ is the one the deterministic test phase runs alone.
 quality:
   typecheck: { argv: ["pnpm", "--dir", "cockpit", "typecheck"], area: frontend, operation: typecheck }
   contract:  { argv: ["pnpm", "--dir", "cockpit", "check:contract"], area: frontend }
-  # test:    { argv: ["uv", "run", "pytest", "-q"], timeout: 600 }   # Atelier has no unit suite
+  mirror:    { argv: ["pnpm", "--dir", "cockpit", "check:mirror"], area: frontend }
+  types:     { argv: ["pnpm", "--dir", "cockpit", "check:types"], area: frontend }
+  vitest:    { argv: ["pnpm", "--dir", "cockpit", "test:run"], area: frontend }
+  test:      { argv: ["uv", "run", "--project", "engine/adws", "pytest", "engine/adws/tests", "-q"], area: backend }
 ```
+
+`operation` is a bounded classifier (`lint|typecheck|build`), so the `test`/`vitest`/parity blocks
+omit it. Because these run in every quality phase, a self-build ADW is gated by the full suite +
+seam-mirror parity, not just typecheck — the tie-in that lets the factory safely build itself
+([`dogfood-selfhost.md`](dogfood-selfhost.md)).
 
 This is the change that made stamped-repo updates clean (distribution **Part B**): moving the
 per-repo commands out of the managed `quality.py` and into the config the updater never touches, so
