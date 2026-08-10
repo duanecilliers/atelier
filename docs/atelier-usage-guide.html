@@ -1,6 +1,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Atelier — Field Guide: Using the Factory on Real Projects</title>
+<title>Atelier — Field Guide: Using the Factory on Your Project</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -110,198 +110,159 @@
 
 <div class="wrap">
 
-  <p class="eyebrow">Atelier · Companion to the Build Plan · Field notes</p>
+  <p class="eyebrow">Atelier · Field Guide · Using the factory on your own repo</p>
   <h1>Using the Factory<span class="caret"></span></h1>
-  <p class="subttl">How you'd actually point Atelier at a real Laravel/DDD codebase — before Phase 0</p>
-  <p class="lede">The <a href="atelier-plan.html">build plan</a> describes what Atelier <b>will be</b>. This doc is a reality check on what the engine <b>is today</b> and a concrete playbook for the two archetype projects you'd try it on — a high-stakes payments app and a smaller back-office admin app. Short version: <b>a well-structured DDD Laravel app is an unusually clean fit</b> — its <code>domain/</code> folders map 1:1 onto <code>tests/</code> folders, already fenced by exactly the deterministic gates SSSF wants (PHPStan, Pest, Rector, phpat boundaries). The engine barely has to bring its own guardrails; the repo ships them.</p>
-  <p class="lede" style="font-size:13px;">But you'd be running the <b>SSSF engine as it exists now</b> — not the finished cockpit. Three facts change how you'd use it, and they're in §01.</p>
+  <p class="subttl">How to point Atelier at any codebase — stamp, wire, scope, and run</p>
+  <p class="lede">Atelier is a software factory with one rule: <b>agents propose, deterministic code disposes.</b> A Python engine runs coding agents inside bounded phases and decides sequencing and acceptance; a web cockpit observes and controls it. The two halves meet at a single SQLite file that <i>is</i> the trace. This guide is the practical path from "I have a repo" to "an agent shipped a change I trust" — the same six moves for any project, the model for scoping a run, which workflow to reach for, and where the guardrails are.</p>
+  <p class="lede" style="font-size:13px;">You don't need to read the architecture docs first. You do need a git repo, one model provider key, and a handful of real verify commands. Everything below is language-agnostic; the examples just illustrate the shape.</p>
 
-  <!-- 01 REALITY CHECK -->
+  <!-- 01 MENTAL MODEL -->
   <section>
-    <h2><span class="n">01</span> Reality check — what v1 gives you today</h2>
-    <p>Before scoping tasks, internalise where the engine actually is. These aren't blockers — they're the shape of the tool you'd be holding.</p>
+    <h2><span class="n">01</span> The one rule — and why it makes the factory safe</h2>
+    <p>Internalise this before you scope anything. Every design decision downstream follows from it.</p>
     <div class="grid g3">
-      <div class="callout warn">
-        <h3>Pi only. CC is stubbed.</h3>
-        <p style="font-size:11.5px;margin:0;color:var(--text2)"><code>agent_cc.py</code> raises <code>NotImplementedError</code>. The roster runs entirely through the <b>Pi</b> backend, and <code>validate()</code> rejects any agent set to <code>claude_code</code> before it spawns. The plan's "Opus/Fable via Agent SDK" split is <b>Phase-2+ work</b>. Today: pick Pi-reachable models for every phase.</p>
+      <div class="callout">
+        <h3>Agents propose.</h3>
+        <p style="font-size:11.5px;margin:0;color:var(--text2)">A model runs inside a bounded <b>phase</b> and emits a typed <b>envelope</b> — a plan, a set of edits, a report. It never decides whether its own work is good enough. That call belongs to code.</p>
       </div>
-      <div class="callout warn">
-        <h3>Commits straight to your branch.</h3>
-        <p style="font-size:11.5px;margin:0;color:var(--text2)">No branch-per-run, no sandbox, no PR, no human-approval phase. A chain that ends in a <code>commit</code> phase does <code>git add -A &amp;&amp; git commit</code> on <b>whatever branch you're on</b>. On money-touching repos that's a footgun — you'll add a branch-per-run wrapper (§02).</p>
+      <div class="callout">
+        <h3>Code disposes.</h3>
+        <p style="font-size:11.5px;margin:0;color:var(--text2)">A deterministic <b>gate</b> accepts or rejects the envelope — your real typecheck, tests, and lint. A rejected build flows back into the agent to retry. The gate is only as honest as the commands you wire into it.</p>
       </div>
-      <div class="callout warn">
-        <h3>The test gate is a placebo.</h3>
-        <p style="font-size:11.5px;margin:0;color:var(--text2)"><code>quality.py</code> ships commands that <code>echo</code> and exit 0. Out of the box <code>adw_build_test</code> reports <b>green on a repo with zero real tests run</b>. Wiring your actual verify commands into that one file is the first thing you customise — and it's what makes Atelier trustworthy on these repos.</p>
+      <div class="callout">
+        <h3>The trace is the seam.</h3>
+        <p style="font-size:11.5px;margin:0;color:var(--text2)">Every phase, envelope, and gate result is written to one SQLite file (<code>sssf.db</code>) as it happens. The engine writes it; the cockpit reads it live. That file is the single source of truth about a run.</p>
       </div>
     </div>
-    <p class="caption">Net: v1 is <b>observe-first and Pi-driven</b>, exactly as D4 locks it. You run ADWs from the CLI, watch them in the read-only cockpit, and the "launch from UI" / model-stack story arrives in later phases. Plan your first month around that.</p>
+    <div class="grid g2" style="margin-top:14px">
+      <div class="card">
+        <p class="kicker"><span class="dot ok"></span> Two coding-agent backends, one abstraction</p>
+        <p style="font-size:12px;margin:0;color:var(--text2)">Each agent runs on either <code>claude_code</code> (Claude via the Agent SDK, using your local <code>claude</code> CLI login — no API key) or <code>pi</code> (drives other providers via the <code>pi</code> CLI). You set the backend and model <b>per agent</b> in the roster. Anthropic models always route through the SDK automatically. Mix freely — a Claude planner with a non-Claude builder is normal.</p>
+      </div>
+      <div class="card">
+        <p class="kicker"><span class="dot ok"></span> Runs are isolated by default when you want them to be</p>
+        <p style="font-size:12px;margin:0;color:var(--text2)">A write-capable run can execute in a <b>sandbox</b>: a persistent git worktree on its own branch, with the land step wired to open a PR. Nothing lands on your working branch behind your back. Isolation is opt-in per launch — see §05.</p>
+      </div>
+    </div>
+    <p class="caption">Net: the engine is trustworthy exactly to the degree that <b>your gates are real</b> and <b>your write boundaries are tight</b>. Those two things — §02 step 2 and §03 — are the whole job of onboarding.</p>
   </section>
 
-  <!-- 02 ADOPTION PATTERN -->
+  <!-- 02 ONBOARDING -->
   <section>
-    <h2><span class="n">02</span> The onboarding pattern — same six moves for any repo</h2>
-    <p>SSSF installs <i>into</i> a target repo: it stamps an <code>adws/</code> tree and operates on the git root of the current working directory. There's no "target repo" flag — you <code>cd</code> into the project and run there. So onboarding any such repo is the same recipe:</p>
+    <h2><span class="n">02</span> Onboarding any repo — the same six moves</h2>
+    <p>Atelier installs <i>into</i> a target repo: it stamps a self-contained <code>adws/</code> tree plus the operator skill, and thereafter operates on the git root of that repo. There's no "target" flag — you run the workflows from the repo root. Onboarding is the same recipe every time:</p>
     <ol class="steps">
-      <li><b>Stamp the factory.</b> Copy the <code>sssf</code> skill into the repo's <code>.claude/skills/</code>, then <code>uv run .claude/skills/sssf/scripts/install.py</code> from the repo root. This lands <code>adws/</code>, a starter <code>sssf.config.yaml</code>, prompts, and a <code>justfile</code>. Commit it as its own change so it's reviewable and reversible.</li>
-      <li><b>Wire <code>quality.py</code> to the repo's real verify commands</b> — the single most important step. Replace the echo placeholders with the actual argv (see per-project §04). This turns the deterministic test/quality gate from theatre into a real acceptance check.</li>
-      <li><b>Author the roster</b> in <code>sssf.config.yaml</code>: models per agent (all Pi for now), and — critically — a <code>writes:</code> allowlist per agent scoped to the domain folder you're targeting. The write-boundary enforcer rolls back anything outside it.</li>
-      <li><b>Add a branch-per-run wrapper.</b> Since the engine commits to the current branch, front every run with <code>git switch -c atelier/&lt;adw_id&gt;</code>. A three-line shell/just recipe closes the biggest v1 gap for these repos.</li>
-      <li><b>Set keys &amp; smoke-test.</b> <code>cp .env.sample .env</code>, add the provider key(s) your models need, then <code>just demo</code> (two cheap read-only runs) and <code>just obs</code> to confirm the trace UI sees the db.</li>
-      <li><b>Start read-only.</b> First real runs are <code>adw_scout</code> / <code>adw_plan</code> — no writes, no commits. Read the envelopes and gate evidence in the cockpit before you ever let a <code>builder</code> touch a file.</li>
+      <li><b>Stamp the factory.</b> From your Atelier checkout, run <code>uv run engine/adws/install.py /path/to/your-repo</code> (add <code>--init</code> to git-init an empty one). This lands <code>adws/</code>, a starter <code>sssf.config.yaml</code>, prompt templates, a <code>justfile</code>, and <code>.claude/skills/atelier/</code>, and records a manifest so later <code>update.py</code> runs can pull engine improvements without touching your layer. Commit the stamp as its own reviewable change.</li>
+      <li><b>Wire the quality gate to your repo's real commands</b> — the single most important step. The <code>quality:</code> block in <code>sssf.config.yaml</code> is just data: a named list of argv. Replace the starters with the checks you actually trust (see below). This is what turns the gate from theatre into a real acceptance bar.</li>
+      <li><b>Author the roster.</b> In <code>sssf.config.yaml</code>, set each agent's <code>coding_agent</code> + <code>model</code>, and — critically — a <code>writes:</code> allowlist scoping every write-capable agent to the part of the tree it should touch. The enforcer rolls back anything written outside it.</li>
+      <li><b>Fence the load-bearing files.</b> <code>protected_files</code> already blocks the factory's own machinery; add your migrations, auth, secrets, and any file whose breakage is catastrophic. No agent can touch a protected path unless it's named explicitly.</li>
+      <li><b>Set keys and smoke-test.</b> Add the provider key(s) your models need to the engine env (a <code>claude_code</code> agent needs none — it uses your CLI login). Then kick a couple of cheap read-only runs and open the cockpit to confirm it sees the db.</li>
+      <li><b>Start read-only.</b> Your first real runs are <code>scout</code> and <code>plan</code> — no writes, no commits. Read the envelopes and gate evidence in the cockpit before you ever let a builder touch a file.</li>
     </ol>
-    <div class="callout" style="margin-top:16px">
-      <h3>Why this kind of repo flatters the engine</h3>
-      <p style="font-size:12px;margin:0;color:var(--text2)">SSSF's whole thesis is "agent proposes, deterministic code disposes" — but code can only dispose if the repo <i>has</i> deterministic checks. A well-fenced Laravel/DDD repo ships: <b>PHPStan/Larastan</b> (often at <b>level 8</b>), <b>Pest</b> domain suites organised 1:1 with the <code>domain/</code> folders, <b>Rector</b> + <b>PHP-CS-Fixer</b>, and sometimes <b>phpat architecture-boundary tests</b> that fail if a domain imports across its seam. Those <i>are</i> your claim gates. You're not inventing acceptance criteria — you're pointing <code>quality.py</code> at ones that already exist and are already enforced in git hooks.</p>
+
+    <p class="kicker" style="margin-top:18px"><span class="dot ok"></span> Wiring the quality gate — argv, never a shell string</p>
+<pre><code><span class="cmt"># sssf.config.yaml — each entry is a named deterministic check.</span>
+<span class="cmt"># Rules: argv is a LIST; call binaries by bare name; runs with cwd = repo root.</span>
+<span class="cmt"># The `test` block is what the test phase runs alone; the rest run in a quality phase.</span>
+quality:
+  typecheck: { argv: ["<span class="tok-ok">your typechecker</span>"] }      <span class="cmt"># e.g. tsc, mypy, phpstan</span>
+  lint:      { argv: ["<span class="tok-ok">your linter</span>"] }            <span class="cmt"># e.g. eslint, ruff, cs-fixer</span>
+  test:      { argv: ["<span class="tok-ok">your test runner</span>"] }       <span class="cmt"># e.g. pytest, vitest, go test</span>
+</code></pre>
+    <div class="callout" style="margin-top:12px">
+      <h3>Why a well-fenced repo flatters the engine</h3>
+      <p style="font-size:12px;margin:0;color:var(--text2)">"Code disposes" only works if the repo <i>has</i> deterministic checks. Any repo that already ships a real typecheck, a test suite, and a linter — and enforces them in CI or a pre-commit hook — is handing Atelier its acceptance criteria for free. You're not inventing gates; you're pointing <code>quality:</code> at ones that already exist. If a check is missing, the gate can't catch that class of error — so an early, high-value ADW is often <b>adding the tests the gate will then depend on.</b></p>
     </div>
   </section>
 
-  <!-- 03 FIT / SCOPING MODEL -->
+  <!-- 03 SCOPING -->
   <section>
-    <h2><span class="n">03</span> The scoping model — one domain folder per run</h2>
-    <p>Both repos use the same DDD layout: business logic lives in <code>domain/&lt;Module&gt;/</code>, and each module has a matching <code>tests/Domain/&lt;Module&gt;/</code>. That folder pair is your natural unit of work — small enough for one agent to hold, self-contained enough that the write boundary and the test filter line up cleanly.</p>
+    <h2><span class="n">03</span> Scoping a run — one bounded unit of work</h2>
+    <p>The natural unit is one cohesive slice an agent can hold in its head: a module, a package, a feature folder — small enough to reason about, self-contained enough that the write boundary and the test filter line up cleanly. Scope every run with the same four levers.</p>
     <div class="tbl-wrap">
       <table>
-        <thead><tr><th>Move</th><th>How it lands on a Laravel/DDD repo</th></tr></thead>
+        <thead><tr><th>Lever</th><th>What it does</th></tr></thead>
         <tbody>
-          <tr><td class="k">Scope the writes allowlist</td><td><code>writes: [domain/Catalog/, tests/Domain/Catalog/]</code> — the agent physically cannot edit outside the module; the enforcer <code>git checkout</code>s any stray file.</td></tr>
-          <tr><td class="k">Scope the test gate</td><td>Wire the test command as <code>artisan test --filter=Catalog</code> (or the folder path) so the gate runs the module's suite, fast, per attempt.</td></tr>
-          <tr><td class="k">Protect the load-bearing files</td><td><code>protected_files:</code> already blocks <code>adws/</code> itself; add <code>database/migrations/</code>, auth, and pivot tables so no agent can touch them without naming them explicitly.</td></tr>
-          <tr><td class="k">Let phpat/PHPStan be the reviewer</td><td>Architecture-boundary + level-8 static analysis catch cross-domain leakage and type errors deterministically — cheaper and stricter than an LLM reviewer for this class of bug.</td></tr>
+          <tr><td class="k">Scope <code>writes:</code></td><td>List the paths the agent may change (e.g. <code>src/billing/</code> + its tests). The enforcer reverts any file written outside the allowlist — the agent physically cannot stray.</td></tr>
+          <tr><td class="k">Scope the test gate</td><td>Point the <code>test</code> argv at the slice's suite (a <code>--filter</code>/path arg) so the gate runs fast and per-attempt, not the whole suite each retry.</td></tr>
+          <tr><td class="k">Protect the untouchables</td><td>Add migrations, auth, money paths, secrets, and generated files to <code>protected_files</code> so no run edits them without you naming them explicitly.</td></tr>
+          <tr><td class="k">Let deterministic checks be the reviewer</td><td>Static analysis, type checks, and architecture-boundary tests catch whole classes of bug more cheaply and strictly than an LLM reviewer. Lean on them; reserve the agent reviewer for intent, not correctness.</td></tr>
         </tbody>
       </table>
     </div>
+    <p class="caption">A tight <code>writes:</code> plus a scoped <code>test</code> gate is the difference between "an agent edited my repo" and "an agent proposed a bounded change that a real check accepted." Keep both narrow; widen only when a run has earned it.</p>
   </section>
 
-  <!-- 04 PER-PROJECT PLAYBOOKS -->
+  <!-- 04 CHOOSING AN ADW -->
   <section>
-    <h2><span class="n">04</span> Per-project playbooks</h2>
-
-    <!-- PAYMENTS APP -->
-    <div class="phase">
-      <div class="phase-head"><span class="phase-tag">Payments</span><span class="phase-title">Payments platform · Laravel 12 + Filament · PHPStan L8</span><span class="phase-sub">~36k LOC · 198 test files · high blast radius</span></div>
-      <div class="phase-body">
-        <p style="margin-top:0"><b>Character:</b> regulated fintech — card/bank transactions, payouts, chargebacks, third-party gateway webhooks. Excellent test + lint coverage (your friend), but the money paths are unforgiving. This is a repo where you lean <i>hard</i> on the deterministic gates and keep agents out of the hot zones.</p>
-
-        <p class="kicker" style="margin-top:14px"><span class="dot ok"></span> Wire quality.py to</p>
-<pre><code><span class="cmt"># verify gate  → static analysis + boundaries (fast, no DB)</span>
-["composer","phpstan"]         <span class="cmt"># larastan level 8, respects phpstan-baseline.neon</span>
-<span class="cmt"># test gate    → scoped Pest suite for the module in play</span>
-["php","artisan","test","--filter=&lt;Module&gt;"]
-<span class="cmt"># pre-commit style bundle for a fuller pass</span>
-["composer","lint"]            <span class="cmt"># rector + cs-fixer + phpstan + phpmd + phpcpd</span></code></pre>
-
-        <div class="grid g2" style="margin-top:12px">
-          <div class="card">
-            <p class="kicker"><span class="dot ok"></span> Green zone — good first ADWs <span class="badge green" style="margin-left:auto">start here</span></p>
-            <ul class="tight">
-              <li><code>domain/Docs/</code> — API-doc generation, low risk</li>
-              <li><code>domain/Catalog/</code> — read model, well-bounded</li>
-              <li><code>domain/Shared/</code> helpers, <code>domain/Users/</code> mgmt</li>
-              <li>Test back-fill on under-covered domains</li>
-              <li>Rector/CS-Fixer cleanup runs (<code>adw_quality</code>)</li>
-            </ul>
-          </div>
-          <div class="card">
-            <p class="kicker"><span class="dot err"></span> Red zone — human-only, keep agents out <span class="badge red" style="margin-left:auto">no-go</span></p>
-            <ul class="tight">
-              <li><code>Transactions/</code>, <code>Payouts/</code> — live money, actively fragile</li>
-              <li><code>Gateways/</code> — third-party webhooks, unauth public endpoints</li>
-              <li>Auth: Sanctum, spatie-permission, Breezy 2FA, tenant global scopes</li>
-              <li><code>database/migrations/</code> — highest blast radius; some repair live data</li>
-              <li>Deploy: CI pipeline YAML, <code>docker/</code>, infra/deploy scripts</li>
-            </ul>
-          </div>
-        </div>
-
-        <div class="callout err" style="margin-top:12px">
-          <h3>Payments-app traps</h3>
-          <p style="font-size:11.5px;margin:0 0 6px;color:var(--text2)"><b>No <code>Co-Authored-By</code> trailers.</b> <code>AGENTS.md</code> explicitly forbids them — override the default commit-message shape in your builder/documenter prompts and the git commit phase.</p>
-          <p style="font-size:11.5px;margin:0 0 6px;color:var(--text2)"><b>CI does not run tests.</b> CI runs only rector/cs-fixer/phpstan/phpcpd; the Pest suite is enforced by local git hooks. So your <code>quality.py</code> test gate is the <i>only</i> automated test signal — it has to be real.</p>
-          <p style="font-size:11.5px;margin:0;color:var(--text2)"><b>Respect the baselines.</b> <code>phpstan-baseline.neon</code> / <code>phpmd.baseline.xml</code> grandfather existing debt — the gate should fail on <i>new</i> violations only, which the baseline files already handle. Don't let an agent "fix" the baseline.</p>
-        </div>
-      </div>
-    </div>
-
-    <!-- ADMIN APP -->
-    <div class="phase">
-      <div class="phase-head"><span class="phase-tag">Admin</span><span class="phase-title">Back-office admin · Laravel 11 + Filament</span><span class="phase-sub">~13k LOC · 54 test files · moderate coverage</span></div>
-      <div class="phase-body">
-        <p style="margin-top:0"><b>Character:</b> internal back-office — records, catalog entries, partners, and bulk CSV/Excel import. Smaller and lower-stakes than the payments app (no payment gateway; "money" is percentage/rate math). A single agent holds a whole domain module comfortably. Good repo to <b>build your confidence</b> before letting Atelier near the payments app's money paths.</p>
-
-        <p class="kicker" style="margin-top:14px"><span class="dot ok"></span> Wire quality.py to</p>
-<pre><code><span class="cmt"># verify gate</span>
-["vendor/bin/phpstan","analyse","--memory-limit=1024M"]
-<span class="cmt"># test gate  (RefreshDatabase → needs the testing DB up)</span>
-["php","artisan","test","--parallel","--filter=&lt;Module&gt;"]
-<span class="cmt"># style</span>
-["vendor/bin/php-cs-fixer","fix","--dry-run","--diff"]</code></pre>
-
-        <div class="grid g2" style="margin-top:12px">
-          <div class="card">
-            <p class="kicker"><span class="dot ok"></span> Green zone — good first ADWs <span class="badge green" style="margin-left:auto">start here</span></p>
-            <ul class="tight">
-              <li><code>Partners/</code>, <code>Catalog/</code>, <code>Lookups/</code>, <code>Sections/</code> — low coupling</li>
-              <li><code>Reporting/</code> — additive, read-heavy</li>
-              <li>Test coverage back-fill (only 54 test files → lots of headroom)</li>
-              <li>Fix stale docs (e.g. a <code>CLAUDE.md</code> that names the wrong UI stack)</li>
-            </ul>
-          </div>
-          <div class="card">
-            <p class="kicker"><span class="dot warn"></span> Amber / red — extra care <span class="badge amber" style="margin-left:auto">gated</span></p>
-            <ul class="tight">
-              <li><code>Orders/</code>, <code>Products/</code> — core domains; a shared <code>split_percentage</code> field ripples wide</li>
-              <li><code>Billing/</code> — rate/percentage math, money-adjacent</li>
-              <li><code>database/migrations/</code> — <b>an active PK-type migration mid-flight</b>; new migrations must not break it</li>
-              <li>Auth: Filament Breezy sessions/2FA</li>
-              <li>Bulk import pipeline (<code>imports</code>, SQS jobs, S3) — failure-prone, external</li>
-            </ul>
-          </div>
-        </div>
-
-        <div class="callout warn" style="margin-top:12px">
-          <h3>Admin-app traps</h3>
-          <p style="font-size:11.5px;margin:0 0 6px;color:var(--text2)"><b>UUID-as-PK is load-bearing.</b> Observers generate <code>Str::orderedUuid()</code> and a PK-type migration is mid-flight. Keep agents out of <code>database/migrations/</code> and don't let them "simplify" the UUID route-key traits.</p>
-          <p style="font-size:11.5px;margin:0 0 6px;color:var(--text2)"><b>Tests use <code>RefreshDatabase</code>.</b> The test gate needs the <code>testing</code> Postgres DB reachable (Sail provisions it). If the DB isn't up, the gate fails for the wrong reason — make sure Sail is running before a build+test chain.</p>
-          <p style="font-size:11.5px;margin:0;color:var(--text2)"><b>CI doesn't run tests here either</b> — same as the payments app. Your <code>quality.py</code> gate is the test signal.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- 05 TASK → ADW RECIPES -->
-  <section>
-    <h2><span class="n">05</span> Task → ADW recipes</h2>
-    <p>SSSF ships 12 ADWs. Here's which to reach for, matched to work you'd actually queue on these repos. Start at the top (read-only), earn your way down.</p>
+    <h2><span class="n">04</span> Choosing a workflow — task → ADW</h2>
+    <p>An <b>ADW</b> ("AI Developer Workflow") is a script that composes phases. The stamped engine ships a graded set, from read-only recon up to a full lifecycle. Start at the top and earn your way down — each row adds capability and blast radius.</p>
     <div class="tbl-wrap">
       <table>
-        <thead><tr><th>You want to…</th><th>ADW</th><th>Writes?</th><th>Notes for these repos</th></tr></thead>
+        <thead><tr><th>You want to…</th><th>ADW</th><th>Writes?</th><th>Notes</th></tr></thead>
         <tbody>
-          <tr><td class="k">Understand a domain before touching it</td><td><code>adw_scout</code></td><td>No</td><td>Read-only recon. Perfect first contact with any <code>domain/&lt;Module&gt;</code>.</td></tr>
-          <tr><td class="k">Turn a Jira ticket into a plan</td><td><code>adw_plan</code></td><td>specs/ only</td><td>Review the plan envelope in the cockpit before building. Zero risk.</td></tr>
-          <tr><td class="k">Back-fill tests on a thin module</td><td><code>adw_build_test</code></td><td>module + tests</td><td>Ideal green-zone task. Gate = the Pest suite you wired. The admin app especially.</td></tr>
-          <tr><td class="k">Small feature end-to-end</td><td><code>adw_plan_build_test</code></td><td>module + tests</td><td>plan → build → test → commit. Behind a branch-per-run wrapper only.</td></tr>
-          <tr><td class="k">Rector / CS-Fixer / style sweep</td><td><code>adw_quality</code></td><td>—</td><td>No agents; runs your lint bundle deterministically. Safe, high-value.</td></tr>
-          <tr><td class="k">Full lifecycle w/ review + docs</td><td><code>adw_simple_sdlc</code></td><td>module + docs</td><td>plan→build→test→review→docs, 3 commits. Save for once you trust the gates.</td></tr>
-          <tr><td class="k">Document a diff</td><td><code>adw_document</code></td><td>docs/</td><td>Reads <code>git diff</code>, writes docs. Watch the no-<code>Co-Authored-By</code> rule on the payments app.</td></tr>
+          <tr><td class="k">Understand an area before touching it</td><td><code>adw_scout</code></td><td>No</td><td>Read-only recon. The safe first contact with any module.</td></tr>
+          <tr><td class="k">Turn a request into a plan</td><td><code>adw_plan</code></td><td>plan only</td><td>Review the plan envelope in the cockpit before building. Zero risk.</td></tr>
+          <tr><td class="k">Run one free-form agent phase</td><td><code>adw_prompt</code></td><td>per roster</td><td>The smallest ADW: one agent, one prompt, fully traced. Good for probes.</td></tr>
+          <tr><td class="k">Run lint/typecheck/build only</td><td><code>adw_quality</code></td><td>—</td><td>No agent; runs your deterministic bundle. Safe, high signal.</td></tr>
+          <tr><td class="k">Build from an existing plan</td><td><code>adw_build</code></td><td>scoped</td><td>Implementation only. Pairs with a plan you already reviewed.</td></tr>
+          <tr><td class="k">Build with a verify gate</td><td><code>adw_build_test</code></td><td>scoped</td><td>Implement, then run the test gate; failures flow back into the builder to retry.</td></tr>
+          <tr><td class="k">Build with an agent review</td><td><code>adw_build_review</code></td><td>scoped</td><td>Implement, then confirm it matches intent.</td></tr>
+          <tr><td class="k">Small feature, plan → build</td><td><code>adw_plan_build</code></td><td>scoped</td><td>Two-agent chain: planner → envelope → builder.</td></tr>
+          <tr><td class="k">Feature end-to-end with a gate</td><td><code>adw_plan_build_test</code></td><td>scoped</td><td>plan → build → test. The full starter chain.</td></tr>
+          <tr><td class="k">…plus deterministic quality</td><td><code>adw_plan_build_test_quality</code></td><td>scoped</td><td>Adds the quality bundle after the test gate.</td></tr>
+          <tr><td class="k">Full lifecycle with review + docs</td><td><code>adw_simple_sdlc</code></td><td>scoped</td><td>plan → build → test → review → document, committing as it goes. Save for once you trust the gates.</td></tr>
+          <tr><td class="k">Document a change from the diff</td><td><code>adw_document</code></td><td>docs only</td><td>Reads <code>git diff</code>, writes docs. Handy after a merge.</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="caption">Chain them by reusing the <code>--adw-id</code>: run <code>adw_plan</code>, read it, then <code>adw_build_test --adw-id &lt;same&gt;</code> resumes the same session with the planner's context intact.</p>
+    <p class="caption">Chain ADWs by reusing the <code>--adw-id</code>: run <code>adw_plan</code>, read it, then resume the same session with the planner's context intact for the build. The cockpit can also launch and cancel runs for you — a UI-launched run is byte-for-byte identical to one you'd type at the CLI.</p>
+  </section>
+
+  <!-- 05 ISOLATION -->
+  <section>
+    <h2><span class="n">05</span> Isolation — sandboxes instead of committing to your branch</h2>
+    <p>By default a run executes at the repo root and commits to whatever branch you're on. For anything write-capable on a repo that matters, run it in a <b>sandbox</b> instead: an isolated, persistent git worktree on a named branch that hosts one or more runs. The run's trace still lands in the shared <code>sssf.db</code>, so you observe it exactly the same way — but its file changes are quarantined on their own branch.</p>
+    <div class="grid g2">
+      <div class="card">
+        <p class="kicker"><span class="dot ok"></span> What a sandbox gives you</p>
+        <ul class="tight">
+          <li>A worktree on its own branch — nothing touches your working tree</li>
+          <li>Provisioned <b>once</b> at create (deps, ports, env), so follow-up runs start warm</li>
+          <li>A <code>land</code> hook you configure — e.g. push the branch and open a PR</li>
+          <li>Optional backing services brought up per sandbox (DB, compose stack) and torn down on shutdown</li>
+        </ul>
+      </div>
+      <div class="card">
+        <p class="kicker"><span class="dot ok"></span> How you drive it</p>
+        <ul class="tight">
+          <li>Configure the <code>sandbox:</code> block once in <code>sssf.config.yaml</code></li>
+          <li>Create a sandbox and bind runs to it; the worker provisions it</li>
+          <li>When you're happy, trigger <b>Land</b> — the hook runs once in the worktree (PR / merge / manual)</li>
+          <li>Shut it down when done; the branch survives teardown</li>
+        </ul>
+      </div>
+    </div>
+    <div class="callout" style="margin-top:12px">
+      <h3>The control plane never spawns a process</h3>
+      <p style="font-size:12px;margin:0;color:var(--text2)">This is the determinism spine, and it's why UI control is safe: the cockpit only writes an intent — enqueue a launch spec, flip a <code>cancel</code>/<code>land</code>/<code>shutdown</code> flag. A single worker turns those intents into real runs and disposes them. The UI cannot mutate a run's trace or its acceptance. Keep that invariant if you extend either side.</p>
+    </div>
   </section>
 
   <!-- 06 GUARDRAILS -->
   <section>
-    <h2><span class="n">06</span> Cross-cutting guardrails &amp; gotchas</h2>
+    <h2><span class="n">06</span> Guardrails &amp; common gotchas</h2>
     <div class="tbl-wrap zone">
       <table>
         <thead><tr><th>Gotcha</th><th>Sev</th><th>What to do</th></tr></thead>
         <tbody>
-          <tr><td class="k">Commits land on your current branch</td><td class="sev hi">HIGH</td><td>Wrap every write-capable run in <code>git switch -c atelier/&lt;id&gt;</code> first. Never run a build/commit chain directly on <code>develop</code>/<code>master</code>/<code>staging</code>.</td></tr>
-          <tr><td class="k">quality.py placeholders report false green</td><td class="sev hi">HIGH</td><td>Wire real argv before trusting any <code>*_test</code> ADW. This is step 2 of onboarding for a reason.</td></tr>
-          <tr><td class="k">These are git worktrees w/ symlinked shared config</td><td class="sev med">MED</td><td><code>.env</code>, <code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>.claude/</code> resolve into <code>../shared/</code>. An agent editing "a config file" may hit shared state across worktrees. Add those symlink targets to <code>protected_files</code>.</td></tr>
-          <tr><td class="k">CI never runs the test suite (both repos)</td><td class="sev med">MED</td><td>Your <code>quality.py</code> test gate is the sole automated test signal. Treat a passing gate as the acceptance bar, and still open a PR for human review.</td></tr>
-          <tr><td class="k">Migrations / auth / money paths</td><td class="sev hi">HIGH</td><td>Keep them in <code>protected_files</code>. The payments app's payouts+gateways+tenant scopes and the admin app's live UUID migration are explicit no-agent zones.</td></tr>
-          <tr><td class="k">Pi model availability &amp; keys</td><td class="sev lo">LOW</td><td><code>validate()</code> only checks model spelling, not keys — a missing provider key fails mid-chain. Point the whole roster at one <code>defaults.model</code> until you need per-phase models, to need one key.</td></tr>
+          <tr><td class="k">A default run commits to your current branch</td><td class="sev hi">HIGH</td><td>Run anything write-capable in a <b>sandbox</b> (§05) so changes land on their own branch, or switch to a throwaway branch first. Never run a build/commit chain directly on your main/release branch.</td></tr>
+          <tr><td class="k">An empty or fake quality gate reports false green</td><td class="sev hi">HIGH</td><td>Wire real argv before trusting any <code>*_test</code> or <code>*_quality</code> ADW. An absent <code>quality:</code> block runs nothing and says so — don't mistake that for a pass.</td></tr>
+          <tr><td class="k">Migrations, auth, secrets, money paths</td><td class="sev hi">HIGH</td><td>Keep them in <code>protected_files</code>. These are the paths where a plausible-looking wrong change is most expensive — make agents name them explicitly to touch them, which they won't by default.</td></tr>
+          <tr><td class="k">Shared/symlinked config across worktrees</td><td class="sev med">MED</td><td>If your repo symlinks <code>.env</code>, agent-guidance files, or <code>.claude/</code> into shared state, an agent "editing a config file" can affect siblings. Add those targets to <code>protected_files</code>.</td></tr>
+          <tr><td class="k">CI that doesn't run the full suite</td><td class="sev med">MED</td><td>If CI skips tests, your <code>quality:</code> gate is the only automated test signal. Treat a passing gate as the bar, and still open a PR for human review.</td></tr>
+          <tr><td class="k">Wrong model / missing provider key</td><td class="sev lo">LOW</td><td>Validation checks model spelling, not credentials — a missing key fails mid-chain. Point the roster at one shared model until you need per-phase models, so you only manage one key. A <code>claude_code</code> agent needs none.</td></tr>
+          <tr><td class="k">Repo guidance leaks into agents</td><td class="sev lo">LOW</td><td>Agents see your repo's <code>AGENTS.md</code>/<code>CLAUDE.md</code> as project guidance. Keep operator-only instructions out of those files — put them where only you read them.</td></tr>
         </tbody>
       </table>
     </div>
@@ -310,36 +271,36 @@
   <!-- 07 ROLLOUT -->
   <section>
     <h2><span class="n">07</span> Suggested rollout — crawl, walk, run</h2>
-    <p>Sequenced so trust is earned by evidence in the cockpit, not asserted. Maps onto the plan's observe-first v1.</p>
+    <p>Sequence it so trust is earned by evidence in the cockpit, not asserted. If you have more than one repo, start on the smaller, lower-stakes one.</p>
     <div class="phase">
-      <div class="phase-head"><span class="phase-tag">Crawl</span><span class="phase-title">Observe on the admin app</span><span class="phase-sub">read-only, zero commits</span></div>
+      <div class="phase-head"><span class="phase-tag">Crawl</span><span class="phase-title">Observe — read-only, zero commits</span><span class="phase-sub">confirm the trace is faithful</span></div>
       <div class="phase-body"><ul class="tight">
-        <li>Stamp SSSF into the admin app (smaller, lower-stakes). Wire <code>quality.py</code>. Point cockpit at its <code>sssf.db</code>.</li>
-        <li>Run <code>adw_scout</code> + <code>adw_plan</code> across a couple of green-zone modules. Read every envelope + gate report.</li>
-        <li>Goal: confirm the trace is faithful and the gates fire — no writes yet.</li>
+        <li>Stamp the engine, wire <code>quality:</code>, point the cockpit at the repo's <code>sssf.db</code>.</li>
+        <li>Run <code>adw_scout</code> + <code>adw_plan</code> across a couple of low-risk areas. Read every envelope and gate report.</li>
+        <li>Goal: prove the trace matches reality and the gates fire — before any write.</li>
       </ul></div>
     </div>
     <div class="phase">
-      <div class="phase-head"><span class="phase-tag">Walk</span><span class="phase-title">First writes on the admin app green zone</span><span class="phase-sub">branch-per-run, test-back-fill</span></div>
+      <div class="phase-head"><span class="phase-tag">Walk</span><span class="phase-title">First writes in a low-risk area</span><span class="phase-sub">sandboxed, test-back-fill</span></div>
       <div class="phase-body"><ul class="tight">
-        <li>Add the branch-per-run wrapper. Run <code>adw_build_test</code> to back-fill tests on <code>Partners/</code> / <code>Catalog/</code>.</li>
-        <li>Review the resulting branch as a normal PR. Measure: gate pass-rate, retries, token cost per run in the cockpit.</li>
+        <li>Run write-capable ADWs in a <b>sandbox</b>. Start with <code>adw_build_test</code> to back-fill tests on a well-bounded module.</li>
+        <li>Review the resulting branch as a normal PR. Measure gate pass-rate, retries, and token cost per run in the cockpit.</li>
         <li>Graduate to a small <code>adw_plan_build_test</code> feature once the loop feels boring.</li>
       </ul></div>
     </div>
     <div class="phase">
-      <div class="phase-head"><span class="phase-tag">Run</span><span class="phase-title">Payments-app green zone, gates hardened</span><span class="phase-sub">money paths still human-only</span></div>
+      <div class="phase-head"><span class="phase-tag">Run</span><span class="phase-title">Trusted lifecycles, gates hardened</span><span class="phase-sub">high-stakes paths stay human-only</span></div>
       <div class="phase-body"><ul class="tight">
-        <li>Only after the admin app is routine. Stamp the payments app; wire <code>composer phpstan</code> + scoped Pest + <code>composer lint</code>; enforce no-<code>Co-Authored-By</code>.</li>
-        <li>Scope agents to <code>Docs/</code>, <code>Catalog/</code>, <code>Shared/</code>, test back-fill. Transactions/Payouts/Gateways/auth/migrations stay off-limits indefinitely.</li>
-        <li>This is where Atelier's determinism spine earns its keep: level-8 PHPStan + phpat + Pest are a brutal, honest gate. Let them be the reviewer.</li>
+        <li>Only after the easy cases are routine. Move to <code>adw_simple_sdlc</code> for full plan→build→test→review→docs runs.</li>
+        <li>Keep the scope tight and the untouchables in <code>protected_files</code> indefinitely — money, auth, and migrations stay human-only.</li>
+        <li>This is where the determinism spine earns its keep: a strict typecheck + real tests + boundary checks are a brutal, honest reviewer. Let them be it.</li>
       </ul></div>
     </div>
-    <p class="caption">Everything above is CLI-launched and watched in the read-only cockpit — i.e. it all fits inside the plan's <b>v1 (Phases 0–1)</b>. Launching these runs <i>from</i> the cockpit is Phase 2; none of the rollout waits on it.</p>
+    <p class="caption">Everything above is launchable from the CLI or the cockpit and watched in the same live trace. The rollout is about trust, not features — the engine can do the last row on day one; you shouldn't let it until the first two are boring.</p>
   </section>
 
   <div class="foot">
-    <p><b>Field guide</b> — companion to <a href="atelier-plan.html">atelier-plan.html</a>. · Grounded in a walk of the SSSF engine (engine mechanics, ADWs, gates, quality.py, agent_cc stub) and two real Laravel/DDD repos — a payments platform and a back-office admin app. · Three things to fix before first write: wire <code>quality.py</code>, add branch-per-run, scope <code>writes</code>/<code>protected_files</code>. · Start on the admin app green zone; keep money paths human-only.</p>
+    <p><b>Field guide</b> — a companion to the <a href="atelier-plan.html">build plan</a>, the long-form engineering docs in the repository, and the operator skill (<code>/atelier</code>). · The three things to get right before your first write: <b>wire the quality gate</b>, <b>scope <code>writes:</code> and <code>protected_files</code></b>, and <b>run write-capable ADWs in a sandbox</b>. · Start read-only, start small, and let the deterministic gates be the reviewer.</p>
   </div>
 
 </div>
