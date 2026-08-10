@@ -49,12 +49,18 @@ observability:
 # env). Omit a block to skip it; an empty/absent quality: block runs nothing and
 # says so — no fake green.
 #
-# Atelier has no unit-test suite (so no `test` block — the test phase honestly
-# reports "nothing run"); its real gates are the cockpit's typecheck + seam
-# contract. Quality runs with cwd = repo root, so pnpm is pointed at cockpit/.
+# Atelier's deterministic gates. Quality runs with cwd = repo root, so pnpm is
+# pointed at cockpit/ and pytest at engine/adws/. `test` is the block the
+# deterministic test phase runs alone; the rest run in map order in a quality
+# phase. (operation is a bounded classifier — lint|typecheck|build — so the
+# test/vitest blocks omit it rather than invent a value.)
 quality:
   typecheck: { argv: ["pnpm", "--dir", "cockpit", "typecheck"], area: frontend, operation: typecheck }
   contract:  { argv: ["pnpm", "--dir", "cockpit", "check:contract"], area: frontend }
+  mirror:    { argv: ["pnpm", "--dir", "cockpit", "check:mirror"], area: frontend }
+  types:     { argv: ["pnpm", "--dir", "cockpit", "check:types"], area: frontend }
+  vitest:    { argv: ["pnpm", "--dir", "cockpit", "test:run"], area: frontend }
+  test:      { argv: ["uv", "run", "--project", "engine/adws", "pytest", "engine/adws/tests", "-q"], area: backend }
 
 # Sandbox provisioning — how a run gets an isolated, persistent workspace
 # (docs/design/sandbox-runs.md). `default: local` keeps every run byte-identical

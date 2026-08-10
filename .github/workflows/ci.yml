@@ -1,0 +1,40 @@
+name: CI
+
+# The deterministic gates, run on every push + PR to main. No model calls, no
+# secrets, no cost: real ADW behavior is still verified by "kick a real ADW"
+# locally (see AGENTS.md). check:contract needs a live db and stays a local gate;
+# check:types is the static, db-free seam guard that runs here in its place.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  cockpit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cockpit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: cockpit/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test:run
+      - run: pnpm check:mirror   # roster.ts <-> data_types.py parity
+      - run: pnpm check:types    # engine DDL <-> schemas.ts parity (no live db)
+
+  engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv run --project engine/adws pytest engine/adws/tests -q

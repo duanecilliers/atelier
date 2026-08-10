@@ -1,0 +1,28 @@
+# Dev-only test harness for the Atelier engine.
+#
+# The ADWs themselves are PEP 723 `uv run` scripts (inline deps in each file
+# header) and do NOT use this project - `uv run engine/adws/adw_*.py` still runs
+# in its own isolated, inline-deps environment. This file exists ONLY to configure
+# pytest and supply the test dependencies, so the deterministic "code disposes"
+# logic in adw_modules/ (gates, permissions, provisioning, the control-plane seam,
+# the ADW generator) has real tests. Run from the repo root with:
+#     uv run --project engine/adws pytest engine/adws/tests -q
+# or from here with:  uv run pytest
+[project]
+name = "atelier-engine-tests"
+version = "0"
+requires-python = ">=3.11"
+dependencies = [
+    "pytest>=8",
+    "pydantic>=2",
+    "pyyaml",
+    "python-dotenv",
+    "claude-agent-sdk",
+]
+
+[tool.pytest.ini_options]
+# rootdir is this file's dir (engine/adws); `.` puts adw_modules + make_adw on the
+# import path, `tests` is where the suite lives.
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"

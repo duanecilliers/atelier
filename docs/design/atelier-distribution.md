@@ -118,8 +118,8 @@ no `engine/` segment) **this breaks** — in exactly the repos we want to stamp 
 via `git_helper.repo_root()` + the derived adws subdir like everything else.
 
 **Symlinked worktrees make this worse, and `git_helper.repo_root()` is the fix that also survives
-them.** A bare-repo-with-worktrees layout (e.g. `repayd.git/`, worktrees checked out as
-`repayd.git/<branch>/`) shares one worktree-agnostic `shared/` dir that each worktree symlinks in.
+them.** A bare-repo-with-worktrees layout (e.g. `acme.git/`, worktrees checked out as
+`acme.git/<branch>/`) shares one worktree-agnostic `shared/` dir that each worktree symlinks in.
 The natural stamp target is `shared/adws/`, symlinked into every worktree as `<worktree>/adws →
 ../shared/adws`. Under that layout any `Path(__file__)`-relative resolution is poison:
 `Path(__file__).resolve()` **follows the symlink**, so from a worktree the worker's `__file__`

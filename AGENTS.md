@@ -32,13 +32,22 @@ Run **engine** commands from the repo root; run **cockpit** commands from `cockp
 | Peek at the db | `just sessions` · `just phases <adw_id>` · `just tail <adw_id>` · `just procs <adw_id>` · `just queue` |
 | Cockpit dev server | `cd cockpit && pnpm dev` → http://127.0.0.1:4200 |
 | Typecheck the cockpit | `cd cockpit && pnpm typecheck` |
-| **Verify the seam contract** | `cd cockpit && pnpm check:contract` |
+| **Run the deterministic test suites + parity checks** | `just test` |
+| **Verify the seam contract** (live db) | `cd cockpit && pnpm check:contract` |
 | Production build | `cd cockpit && pnpm build` |
 
-There is **no unit-test suite and no linter** - `pnpm typecheck` and `pnpm check:contract` are
-the automated gates. You verify behavior by kicking a real ADW and reading its trace (this
-calls a model and costs a few cents). Each ADW is a self-contained PEP 723 `uv` script (deps
-in the file header), so `uv run` needs no separate install; the cockpit needs `pnpm install`.
+The automated gates are: **`cd cockpit && pnpm typecheck`**, **`just test`** (engine `pytest` over
+`adw_modules/` + `make_adw`, cockpit `vitest` over the reader/control/roster logic, and the two
+static seam-mirror parity checks `check:mirror` + `check:types`), and the live-db **`pnpm
+check:contract`**. `just test` is fast, offline, and cost-free, so it runs in CI
+(`.github/workflows/ci.yml`) on every push/PR; `check:contract` needs a real `sssf.db` and stays a
+local gate (its static counterpart `check:types` runs in CI instead). There is **no linter**. Tests
+cover only the deterministic "code disposes" half - `agent`-authored behavior is still verified by
+kicking a real ADW and reading its trace (this calls a model and costs a few cents). Engine tests
+run under a dev-only `engine/adws/pyproject.toml` (`uv run --project engine/adws pytest`); the ADWs
+themselves stay PEP 723 `uv` scripts (deps in the file header) - `uv run` needs no separate install;
+the cockpit needs `pnpm install`. The `quality:` block in `sssf.config.yaml` runs the same suites +
+parity checks, so every ADW verify phase (and every self-build sandbox run) is gated by them too.
 
 ## The seam contract - the #1 rule
 

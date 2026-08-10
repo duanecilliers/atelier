@@ -437,7 +437,7 @@ class SandboxConfig(BaseModel):
     default: str = "local"
     # Names the worktrees namespace ~/.atelier/worktrees/<project_name>/. Optional:
     # when unset the worker derives it from the repo's git identity (so a bare-repo
-    # worktree layout like `tmu.git/master` namespaces as `tmu`, not the working-tree
+    # worktree layout like `acme.git/master` namespaces as `acme`, not the working-tree
     # name `master`). Set it to pin an explicit, collision-free name per project -
     # two projects whose working tree is named `master`/`main` would otherwise share
     # a worktrees dir.
@@ -550,7 +550,7 @@ class UsageBreakdown(BaseModel):
 
     def merge(self, other: "UsageBreakdown") -> None:
         """Add another call's usage — a phase that retries spends more than once."""
-        for field in self.model_fields:
+        for field in type(self).model_fields:
             setattr(self, field, getattr(self, field) + getattr(other, field))
 
 

@@ -5,3 +5,9 @@ adws/adw_data/sssf.db*
 .env
 __pycache__/
 *.pyc
+
+# dev test harness (uv-created; ADWs themselves stay PEP723 / inline-deps).
+# The pyproject.toml + tests/ ARE tracked; the resolved env + caches are not.
+adws/.venv/
+adws/uv.lock
+.pytest_cache/

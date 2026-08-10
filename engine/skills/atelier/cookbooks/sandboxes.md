@@ -63,7 +63,7 @@ intent — no page ever spawns a process.
   optional inputs, in precedence order:
   1. **branch** - an explicit branch name, used verbatim (the worker checks it out if it already
      exists, else forks it off HEAD). Wins over purpose. Use it for conventions the namer can't
-     produce (it lowercases and only emits `feat/fix/chore/docs`), e.g. `feature/TMU-233_...`. The
+     produce (it lowercases and only emits `feat/fix/chore/docs`), e.g. `feature/PROJ-233_...`. The
      field validates inline against the same charset as `validateBranchName`.
   2. **purpose** ("what's this sandbox for?") - with a purpose and **no** branch, the row is created
      with `branch` NULL and the **worker names the branch from the purpose** at provision via a
