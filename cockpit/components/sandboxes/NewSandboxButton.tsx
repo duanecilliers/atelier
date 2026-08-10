@@ -18,9 +18,10 @@ import type { SandboxLaunchOption, ProvisionableSandboxLevel } from '@/lib/roste
  *    checks it out verbatim if it already exists (fetch it first to base on origin),
  *    else forks it off HEAD. Use this for conventions the auto-namer can't produce
  *    (e.g. `feature/PROJ-233_...` - the namer lowercases and only emits feat/fix/…).
- *  - purpose (optional) - a human description. When set and no branch is given, the
- *    branch is left unset at create and the worker names it from the purpose via a
- *    cheap model (branch_namer.py) → e.g. `feat/api-rate-limiting`, `adw/<id>` fallback.
+ *  - purpose (optional) - a human description that is always recorded. When set and
+ *    no branch is given, the branch is left unset at create and the worker names it
+ *    from the purpose via a cheap model (branch_namer.py) → e.g.
+ *    `feat/api-rate-limiting`, `adw/<id>` fallback.
  *  - level — worktree (L1) or worktree_env (L2), preselected from `sandbox.default`.
  * The button sends only intent; the branch is resolved server-/worker-side.
  */
@@ -59,10 +60,12 @@ export function NewSandboxButton({
     setBusy(true);
     setError(null);
     try {
-      // Branch wins over purpose, so send one or the other - never a mixed signal.
-      const body = branchActive
-        ? { level, branch: trimmedBranch }
-        : { level, purpose: trimmedPurpose || undefined };
+      // Branch wins naming precedence, but purpose is always recorded when provided.
+      const body = {
+        level,
+        purpose: trimmedPurpose || undefined,
+        ...(branchActive ? { branch: trimmedBranch } : {}),
+      };
       const res = await fetch(withProject('/api/sandboxes', projectId), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -93,11 +96,10 @@ export function NewSandboxButton({
           onKeyDown={(e) => {
             if (e.key === 'Enter') create();
           }}
-          disabled={busy || branchActive}
+          disabled={busy}
           maxLength={500}
           placeholder="what's this sandbox for? (optional)"
           aria-label="Sandbox purpose"
-          title={branchActive ? 'Ignored while an explicit branch is set' : undefined}
           className={`min-w-[16rem] flex-1 ${inputClass}`}
         />
         <input
@@ -163,6 +165,7 @@ export function NewSandboxButton({
           <span className="font-mono text-[10.5px] text-os-dim">
             uses <span className="text-os-muted">{trimmedBranch}</span> verbatim - checked out if it
             already exists (fetch it first to base on origin), else created off HEAD
+            {trimmedPurpose ? '; purpose recorded separately' : ''}
           </span>
         )
       ) : trimmedPurpose ? (
