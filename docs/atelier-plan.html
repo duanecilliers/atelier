@@ -1,6 +1,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Atelier — Software Factory Build Plan</title>
+<title>Atelier - Software Factory Build Plan</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -171,39 +171,39 @@
     <h2><span class="n">01</span> What we take from each</h2>
     <div class="grid g2">
       <div class="card">
-        <p class="kicker"><span class="dot eng"></span> The Engine — from SSSF <span class="badge eng" style="margin-left:auto">Python</span></p>
+        <p class="kicker"><span class="dot eng"></span> The Engine - from SSSF <span class="badge eng" style="margin-left:auto">Python</span></p>
         <h3>Determinism spine</h3>
         <p style="font-size:12px">"Agent proposes, code disposes." Non-deterministic agents live as bounded nodes inside a deterministic Python graph.</p>
         <ul class="tight">
-          <li><b>Typed envelopes</b> — every agent emits a Pydantic-validated JSON contract, not prose</li>
-          <li><b>Deterministic gates</b> — code verifies the envelope's <i>claims</i> against disk &amp; git before proceeding</li>
-          <li><b>kind = engineer · agent · code</b> — known commands (tests, git) are code, never an agent</li>
-          <li><b>Bounded loops</b> — <code>MAX_FIX_LOOPS=3</code>, <code>MAX_REVISION=2</code> as constants, not agent judgment</li>
-          <li><b>Write-boundary enforcement</b> — before/after repo diff, rollback anything outside an agent's allowlist</li>
-          <li><b>Model stack</b> — a different model per phase (Opus 5 / Fable 5 planner, GPT-5.6 Sol builder)</li>
+          <li><b>Typed envelopes</b> - every agent emits a Pydantic-validated JSON contract, not prose</li>
+          <li><b>Deterministic gates</b> - code verifies the envelope's <i>claims</i> against disk &amp; git before proceeding</li>
+          <li><b>kind = engineer · agent · code</b> - known commands (tests, git) are code, never an agent</li>
+          <li><b>Bounded loops</b> - <code>MAX_FIX_LOOPS=3</code>, <code>MAX_REVISION=2</code> as constants, not agent judgment</li>
+          <li><b>Write-boundary enforcement</b> - before/after repo diff, rollback anything outside an agent's allowlist</li>
+          <li><b>Model stack</b> - a different model per phase (Opus 5 / Fable 5 planner, GPT-5.6 Sol builder)</li>
         </ul>
       </div>
       <div class="card">
-        <p class="kicker"><span class="dot ok"></span> The Cockpit — from FounderOS <span class="badge ui" style="margin-left:auto">Next.js</span></p>
+        <p class="kicker"><span class="dot ok"></span> The Cockpit - from FounderOS <span class="badge ui" style="margin-left:auto">Next.js</span></p>
         <h3>Operator console</h3>
-        <p style="font-size:12px">A terminal-grade command center: "Monolith Signal" aesthetic — bare black, JetBrains Mono, color <i>only</i> ever means status.</p>
+        <p style="font-size:12px">A terminal-grade command center: "Monolith Signal" aesthetic - bare black, JetBrains Mono, color <i>only</i> ever means status.</p>
         <ul class="tight">
-          <li><b>App shell</b> — sidebar nav (single source of truth) + ⌘K palette + screen-aware AI dock</li>
-          <li><b>Process Map</b> — horizontal phase pipeline, per-step human/agent/tool owner + status</li>
-          <li><b>Activity feed</b> — newest-first live run log with OK/FAIL + timestamps</li>
-          <li><b>Cost/observability tables</b> — per-agent runs, success rate, tokens, $, latency</li>
-          <li><b>Kanban + Skills library</b> — cards that agents advance; capability grid read live from disk</li>
-          <li><b>Design system</b> — <code>terminal.tsx</code> primitives + tokens, liftable wholesale</li>
+          <li><b>App shell</b> - sidebar nav (single source of truth) + ⌘K palette + screen-aware AI dock</li>
+          <li><b>Process Map</b> - horizontal phase pipeline, per-step human/agent/tool owner + status</li>
+          <li><b>Activity feed</b> - newest-first live run log with OK/FAIL + timestamps</li>
+          <li><b>Cost/observability tables</b> - per-agent runs, success rate, tokens, $, latency</li>
+          <li><b>Kanban + Skills library</b> - cards that agents advance; capability grid read live from disk</li>
+          <li><b>Design system</b> - <code>terminal.tsx</code> primitives + tokens, liftable wholesale</li>
         </ul>
       </div>
     </div>
-    <p class="caption">This very document is rendered in FounderOS's own Monolith Signal tokens — so it doubles as a preview of Atelier's target look.</p>
+    <p class="caption">This very document is rendered in FounderOS's own Monolith Signal tokens - so it doubles as a preview of Atelier's target look.</p>
   </section>
 
   <!-- ============ ARCHITECTURE ============ -->
   <section>
-    <h2><span class="n">02</span> Architecture — two processes, one database</h2>
-    <p>The cockpit and the engine never call each other directly at runtime. They meet at <b>one SQLite file</b>. The engine <i>writes</i> the live trace; the cockpit <i>polls</i> it on a rowid cursor (exactly the contract SSSF's tracer already ships, and exactly the way FounderOS's repo layer already reads). The only net-new plumbing is a <b>control channel</b> — a <code>run_queue</code> table — so the cockpit can <i>launch</i> runs, not just observe them.</p>
+    <h2><span class="n">02</span> Architecture - two processes, one database</h2>
+    <p>The cockpit and the engine never call each other directly at runtime. They meet at <b>one SQLite file</b>. The engine <i>writes</i> the live trace; the cockpit <i>polls</i> it on a rowid cursor (exactly the contract SSSF's tracer already ships, and exactly the way FounderOS's repo layer already reads). The only net-new plumbing is a <b>control channel</b> - a <code>run_queue</code> table - so the cockpit can <i>launch</i> runs, not just observe them.</p>
     <div class="afd">
       <div class="afd-node">Operator<span class="sub">you</span></div>
       <div class="afd-arr"><span class="lbl">launch / cancel</span><span class="ln">↓</span></div>
@@ -219,32 +219,32 @@
       </div>
       <div class="afd-arr"><span class="lbl">stream events live</span><span class="ln">↓</span></div>
       <div class="afd-node seam">sssf.db<span class="sub">SQLite · the seam</span></div>
-      <div class="afd-loop">↑ &nbsp;Cockpit reads <b>sssf.db</b> back on a poll (rowid cursor) — the loop that makes the UI live</div>
+      <div class="afd-loop">↑ &nbsp;Cockpit reads <b>sssf.db</b> back on a poll (rowid cursor) - the loop that makes the UI live</div>
     </div>
     <p class="caption" style="margin-top:10px"><b style="color:var(--ok)">sssf.db</b> is the seam both sides already speak; <b style="color:var(--warn)">run_queue</b> and the cockpit's launch path are the only net-new pieces.</p>
     <div class="grid g3" style="margin-top:14px">
       <div class="callout"><h3>The seam · sssf.db</h3><p style="font-size:11.5px;margin:0">Both sides already speak it. SSSF's tracer writes 7 tables in WAL mode (readers never block the writer); FounderOS reads SQLite through a Zod-validated repo layer. Point that layer at SSSF's schema and observation is nearly free.</p></div>
-      <div class="callout warn"><h3>Net-new · run_queue</h3><p style="font-size:11.5px;margin:0">SSSF is CLI-launched. To launch from the UI we add one table + a tiny worker (or thin FastAPI). Cancel reuses the <code>processes</code> table — pids are already tracked.</p></div>
+      <div class="callout warn"><h3>Net-new · run_queue</h3><p style="font-size:11.5px;margin:0">SSSF is CLI-launched. To launch from the UI we add one table + a tiny worker (or thin FastAPI). Cancel reuses the <code>processes</code> table - pids are already tracked.</p></div>
       <div class="card"><p class="kicker"><span class="dot warn"></span> The one risk to design around</p><p style="font-size:11.5px;margin:0;color:var(--text2)">Python (engine) and TypeScript (cockpit) must agree on the schema forever. Mitigation: generate the TS row types <i>from</i> the Pydantic/SQLite definitions so they can't drift.</p></div>
     </div>
   </section>
 
   <!-- ============ CONCEPT MAPPING ============ -->
   <section>
-    <h2><span class="n">03</span> Concept map — engine ↔ cockpit ↔ unified</h2>
+    <h2><span class="n">03</span> Concept map - engine ↔ cockpit ↔ unified</h2>
     <p>Nearly every ADW primitive already has a FounderOS view waiting for it. The unified column is what we actually build.</p>
     <div class="tbl-wrap">
       <table>
         <thead><tr><th>Engine concept (SSSF)</th><th>Cockpit view (FounderOS)</th><th>Unified in Atelier</th></tr></thead>
         <tbody>
-          <tr><td class="k">adw_id session</td><td>Activity feed row</td><td><b>Run</b> — one line in the run log, click to open</td></tr>
-          <tr><td class="k">Phases (engineer/agent/code)</td><td>WorkflowMap process map</td><td><b>Process Map</b> — live phase pipeline w/ owner lanes</td></tr>
-          <tr><td class="k">sssf.config.yaml roster</td><td>Real Agents runtime page</td><td><b>Agents</b> — roster cards, tier, model, tools, last-run</td></tr>
-          <tr><td class="k">Deterministic gates</td><td>— (none yet)</td><td><b>Gate panel</b> — pass/fail w/ per-check evidence</td></tr>
-          <tr><td class="k">tracer.py · 7 tables</td><td>AgentCostAnalysis table</td><td><b>Observability</b> — tokens, $, latency, success rate</td></tr>
-          <tr><td class="k">UsageBreakdown</td><td>Cost tiles + spark</td><td><b>Cost</b> — per-run &amp; per-model spend, "thousandth run"</td></tr>
-          <tr><td class="k">cookbooks / recipes</td><td>Skills capability library</td><td><b>Skills</b> — card grid read live from the factory</td></tr>
-          <tr><td class="k">— (CLI launch only)</td><td>Tasks Kanban + Conductor</td><td><b>Queue</b> — enqueue/steer runs, NL launch via Conductor</td></tr>
+          <tr><td class="k">adw_id session</td><td>Activity feed row</td><td><b>Run</b> - one line in the run log, click to open</td></tr>
+          <tr><td class="k">Phases (engineer/agent/code)</td><td>WorkflowMap process map</td><td><b>Process Map</b> - live phase pipeline w/ owner lanes</td></tr>
+          <tr><td class="k">sssf.config.yaml roster</td><td>Real Agents runtime page</td><td><b>Agents</b> - roster cards, tier, model, tools, last-run</td></tr>
+          <tr><td class="k">Deterministic gates</td><td>- (none yet)</td><td><b>Gate panel</b> - pass/fail w/ per-check evidence</td></tr>
+          <tr><td class="k">tracer.py · 7 tables</td><td>AgentCostAnalysis table</td><td><b>Observability</b> - tokens, $, latency, success rate</td></tr>
+          <tr><td class="k">UsageBreakdown</td><td>Cost tiles + spark</td><td><b>Cost</b> - per-run &amp; per-model spend, "thousandth run"</td></tr>
+          <tr><td class="k">cookbooks / recipes</td><td>Skills capability library</td><td><b>Skills</b> - card grid read live from the factory</td></tr>
+          <tr><td class="k">- (CLI launch only)</td><td>Tasks Kanban + Conductor</td><td><b>Queue</b> - enqueue/steer runs, NL launch via Conductor</td></tr>
         </tbody>
       </table>
     </div>
@@ -253,7 +253,7 @@
   <!-- ============ DETERMINISM PRESERVED ============ -->
   <section>
     <h2><span class="n">04</span> The determinism the UI must never bypass</h2>
-    <p>The cockpit is a <b>window and a launch button</b> — it observes and enqueues. It must never reach in and mutate a run's acceptance. SSSF wraps every non-deterministic agent call in five deterministic checkpoints inside <code>agents.execute()</code>; we keep all five and simply <i>render</i> them.</p>
+    <p>The cockpit is a <b>window and a launch button</b> - it observes and enqueues. It must never reach in and mutate a run's acceptance. SSSF wraps every non-deterministic agent call in five deterministic checkpoints inside <code>agents.execute()</code>; we keep all five and simply <i>render</i> them.</p>
     <div class="chain">
       <div class="chk"><div class="num">01</div><h4>Schema parse</h4><p>Envelope must parse as its declared Pydantic type. 2 same-session JSON-fix retries.</p></div>
       <div class="chk"><div class="num">02</div><h4>Claim gates</h4><p>Verify the envelope's assertions against disk &amp; git. Violations feed back into the live session.</p></div>
@@ -266,7 +266,7 @@
   <!-- ============ COCKPIT VIEWS (MOCKS) ============ -->
   <section>
     <h2><span class="n">05</span> The three views that make it real</h2>
-    <p>Mocked below in the target design system. These are the <b>v1 / Phase-1 deliverables</b> — everything else is elaboration on top of them.</p>
+    <p>Mocked below in the target design system. These are the <b>v1 / Phase-1 deliverables</b> - everything else is elaboration on top of them.</p>
     <div class="grid g3">
       <div>
         <div class="mock">
@@ -278,7 +278,7 @@
             <div class="runrow"><span class="rk" style="color:var(--ok)">OK</span><span class="rn">dark-mode</span><span style="color:var(--text3)">accepted</span><span class="rt">09:55</span></div>
           </div>
         </div>
-        <p class="caption"><b>Run log</b> — from <code>events</code> + <code>sessions</code>. Live, newest-first.</p>
+        <p class="caption"><b>Run log</b> - from <code>events</code> + <code>sessions</code>. Live, newest-first.</p>
       </div>
       <div>
         <div class="mock">
@@ -291,13 +291,13 @@
               <span class="arrow">›</span>
               <div class="step run"><div class="sl">agent</div><div class="sn">builder</div><div class="sd">running…</div></div>
               <span class="arrow">›</span>
-              <div class="step"><div class="sl">code</div><div class="sn">test</div><div class="sd">—</div></div>
+              <div class="step"><div class="sl">code</div><div class="sn">test</div><div class="sd">-</div></div>
               <span class="arrow">›</span>
-              <div class="step"><div class="sl">agent</div><div class="sn">reviewer</div><div class="sd">—</div></div>
+              <div class="step"><div class="sl">agent</div><div class="sn">reviewer</div><div class="sd">-</div></div>
             </div>
           </div>
         </div>
-        <p class="caption"><b>Process map</b> — FounderOS WorkflowMap re-skinned to ADW phase lanes.</p>
+        <p class="caption"><b>Process map</b> - FounderOS WorkflowMap re-skinned to ADW phase lanes.</p>
       </div>
       <div>
         <div class="mock">
@@ -315,7 +315,7 @@
             </div>
           </div>
         </div>
-        <p class="caption"><b>Run detail</b> — phase timeline + envelope + gate evidence + cost.</p>
+        <p class="caption"><b>Run detail</b> - phase timeline + envelope + gate evidence + cost.</p>
       </div>
     </div>
   </section>
@@ -323,7 +323,7 @@
   <!-- ============ ROADMAP ============ -->
   <section>
     <h2><span class="n">06</span> Build roadmap</h2>
-    <p style="margin-bottom:18px">Per your call, <b>v1 = Phases 0–1</b> (observe-first): prove the seam over real, CLI-launched runs before building the control plane.</p>
+    <p style="margin-bottom:18px">Per your call, <b>v1 = Phases 0-1</b> (observe-first): prove the seam over real, CLI-launched runs before building the control plane.</p>
 
     <div class="phase p0 inv1">
       <div class="phase-head"><span class="phase-tag">Phase 0</span><span class="badge v1">v1</span><span class="phase-title">Foundations &amp; the seam</span><span class="phase-sub">scaffold · no features yet</span></div>
@@ -339,7 +339,7 @@
     </div>
 
     <div class="phase inv1">
-      <div class="phase-head"><span class="phase-tag">Phase 1</span><span class="badge v1">v1</span><span class="phase-title">Observe — read-only cockpit over real runs</span><span class="phase-sub">the core deliverable</span></div>
+      <div class="phase-head"><span class="phase-tag">Phase 1</span><span class="badge v1">v1</span><span class="phase-title">Observe - read-only cockpit over real runs</span><span class="phase-sub">the core deliverable</span></div>
       <div class="phase-body">
         <ul class="tight">
           <li>Point the cockpit repo layer at <code>sssf.db</code> via the rowid polling contract</li>
@@ -351,11 +351,11 @@
     </div>
 
     <div class="phase">
-      <div class="phase-head"><span class="phase-tag">Phase 2</span><span class="phase-title">Control plane — launch from the UI</span><span class="phase-sub">the run_queue</span></div>
+      <div class="phase-head"><span class="phase-tag">Phase 2</span><span class="phase-title">Control plane - launch from the UI</span><span class="phase-sub">the run_queue</span></div>
       <div class="phase-body">
         <ul class="tight">
           <li>Add <code>run_queue</code> table + a small worker (or thin FastAPI) that the engine drains</li>
-          <li>Conductor dock becomes the NL launcher — "plan + build X" picks an ADW + roster</li>
+          <li>Conductor dock becomes the NL launcher - "plan + build X" picks an ADW + roster</li>
           <li>Cancel/kill wired to the existing <code>processes</code> pid tracking</li>
         </ul>
         <div class="ship"><p class="kicker"><span class="dot ok"></span> Ships</p><p>Start &amp; stop runs entirely from the cockpit.</p></div>
@@ -369,7 +369,7 @@
           <li>Cost/usage tables (UsageBreakdown → AgentCostAnalysis): per-run token/$/latency, summed across retries</li>
           <li>Gate panel with evidence + retry visualization; model-stack view (which model per phase, cost per tier)</li>
         </ul>
-        <div class="ship"><p class="kicker"><span class="dot ok"></span> Ships</p><p>Full observability — you can measure, therefore improve.</p></div>
+        <div class="ship"><p class="kicker"><span class="dot ok"></span> Ships</p><p>Full observability - you can measure, therefore improve.</p></div>
       </div>
     </div>
 
@@ -377,8 +377,8 @@
       <div class="phase-head"><span class="phase-tag">Phase 4</span><span class="phase-title">Authoring &amp; reuse</span><span class="phase-sub">systems that build systems</span></div>
       <div class="phase-body">
         <ul class="tight">
-          <li>Roster editor — edit <code>sssf.config.yaml</code> (agents, models, prompts, writes/tools), validated, from the UI</li>
-          <li>ADW builder — wrap <code>make_adw.py</code> to compose phase chains visually</li>
+          <li>Roster editor - edit <code>sssf.config.yaml</code> (agents, models, prompts, writes/tools), validated, from the UI</li>
+          <li>ADW builder - wrap <code>make_adw.py</code> to compose phase chains visually</li>
           <li>Skills / cookbook library reading the factory's own recipes</li>
         </ul>
         <div class="ship"><p class="kicker"><span class="dot ok"></span> Ships</p><p>Create/modify agents &amp; workflows without leaving the cockpit.</p></div>
@@ -390,7 +390,7 @@
       <div class="phase-body">
         <ul class="tight">
           <li>Replace polling with SSE/WebSocket for streaming logs + phase status (FounderOS's one missing piece)</li>
-          <li>Sandbox / cloud runs — "push 80% of junk work to sandboxes"</li>
+          <li>Sandbox / cloud runs - "push 80% of junk work to sandboxes"</li>
           <li>Multi-run dashboard; Tasks Kanban becomes the queue lanes</li>
         </ul>
         <div class="ship"><p class="kicker"><span class="dot ok"></span> Ships</p><p>Live streaming, parallel runs, real queue management.</p></div>
@@ -400,48 +400,48 @@
 
   <!-- ============ DECISIONS LOCKED ============ -->
   <section>
-    <h2><span class="n">07</span> Decisions — locked</h2>
+    <h2><span class="n">07</span> Decisions - locked</h2>
     <div class="tbl-wrap" style="margin-bottom:16px">
       <table>
         <thead><tr><th>#</th><th>Decision</th><th>Locked</th></tr></thead>
         <tbody>
-          <tr><td class="k">D1</td><td class="k">Coding-agent backend</td><td><b>Both</b> — Pi + Claude Code behind the <code>coding_agent</code> abstraction; CC driven by the <b>Agent SDK</b> (see below)</td></tr>
-          <tr><td class="k">D2</td><td class="k">The seam</td><td><b>Hybrid</b> — cockpit reads <code>sssf.db</code> directly; control via a <code>run_queue</code> table + small worker</td></tr>
-          <tr><td class="k">D3</td><td class="k">Repo layout</td><td><b>Monorepo</b> — <code>/engine</code> + <code>/cockpit</code> sharing generated schema types</td></tr>
-          <tr><td class="k">D4</td><td class="k">v1 scope</td><td><b>Observe-first</b> — Phases 0–1, over real CLI-launched runs</td></tr>
+          <tr><td class="k">D1</td><td class="k">Coding-agent backend</td><td><b>Both</b> - Pi + Claude Code behind the <code>coding_agent</code> abstraction; CC driven by the <b>Agent SDK</b> (see below)</td></tr>
+          <tr><td class="k">D2</td><td class="k">The seam</td><td><b>Hybrid</b> - cockpit reads <code>sssf.db</code> directly; control via a <code>run_queue</code> table + small worker</td></tr>
+          <tr><td class="k">D3</td><td class="k">Repo layout</td><td><b>Monorepo</b> - <code>/engine</code> + <code>/cockpit</code> sharing generated schema types</td></tr>
+          <tr><td class="k">D4</td><td class="k">v1 scope</td><td><b>Observe-first</b> - Phases 0-1, over real CLI-launched runs</td></tr>
           <tr><td class="k">D5</td><td class="k">Name</td><td><b>Atelier</b></td></tr>
         </tbody>
       </table>
     </div>
 
     <div class="callout locked">
-      <h3 style="color:var(--text)">D1 deep-dive — driving Claude Code: Agent SDK, not Herdr</h3>
-      <p style="font-size:12.5px;color:var(--text2)">You asked whether to drive CC through <b>Herdr</b> or the <b>Agent SDK</b>. For the <i>engine backend</i>, the <b>Claude Agent SDK</b> (<code>claude-agent-sdk</code>, Python) is the right tool. Herdr is a terminal multiplexer for driving/observing interactive agent panes — a great <i>operator UX</i>, but the wrong seam for a deterministic engine that needs typed, parseable, resumable output. The SDK is purpose-built for exactly SSSF's contract and maps <b>1:1 onto machinery the engine already has</b>:</p>
+      <h3 style="color:var(--text)">D1 deep-dive - driving Claude Code: Agent SDK, not Herdr</h3>
+      <p style="font-size:12.5px;color:var(--text2)">You asked whether to drive CC through <b>Herdr</b> or the <b>Agent SDK</b>. For the <i>engine backend</i>, the <b>Claude Agent SDK</b> (<code>claude-agent-sdk</code>, Python) is the right tool. Herdr is a terminal multiplexer for driving/observing interactive agent panes - a great <i>operator UX</i>, but the wrong seam for a deterministic engine that needs typed, parseable, resumable output. The SDK is purpose-built for exactly SSSF's contract and maps <b>1:1 onto machinery the engine already has</b>:</p>
       <div class="tbl-wrap" style="border-color:color-mix(in oklab,var(--ok) 20%,var(--border))">
         <table>
           <thead><tr><th>SSSF mechanism (exists today)</th><th>Agent SDK primitive</th></tr></thead>
           <tbody>
-            <tr><td class="k">tracer events (agent_start · tool_call · agent_end)</td><td>typed async message stream — <code>SystemMessage</code> · <code>AssistantMessage</code> · <code>ToolResultMessage</code> · <code>ResultMessage</code></td></tr>
-            <tr><td class="k">agent_map session resume</td><td><code>resume="&lt;session_id&gt;"</code> — id from <code>ResultMessage.session_id</code></td></tr>
+            <tr><td class="k">tracer events (agent_start · tool_call · agent_end)</td><td>typed async message stream - <code>SystemMessage</code> · <code>AssistantMessage</code> · <code>ToolResultMessage</code> · <code>ResultMessage</code></td></tr>
+            <tr><td class="k">agent_map session resume</td><td><code>resume="&lt;session_id&gt;"</code> - id from <code>ResultMessage.session_id</code></td></tr>
             <tr><td class="k">permissions.enforce (write boundary)</td><td><code>can_use_tool</code> callback + <code>permission_mode</code> + <code>allowed_tools=["Edit(//src/**)"]</code></td></tr>
             <tr><td class="k">UsageBreakdown ($ + tokens)</td><td><code>ResultMessage.total_cost_usd</code> + usage deltas</td></tr>
-            <tr><td class="k">model stack per phase</td><td><code>model=</code> per call — Claude models via SDK, non-Claude (GPT) via Pi</td></tr>
+            <tr><td class="k">model stack per phase</td><td><code>model=</code> per call - Claude models via SDK, non-Claude (GPT) via Pi</td></tr>
           </tbody>
         </table>
       </div>
-      <h3 style="color:var(--text);margin-top:18px;font-size:12px">Your model stack — why "both" earns its keep</h3>
+      <h3 style="color:var(--text);margin-top:18px;font-size:12px">Your model stack - why "both" earns its keep</h3>
       <div class="tbl-wrap" style="border-color:color-mix(in oklab,var(--ok) 20%,var(--border))">
         <table>
           <thead><tr><th>Phase</th><th>Model</th><th>Backend</th></tr></thead>
           <tbody>
-            <tr><td class="k">Planner</td><td>Opus 5 / Fable 5 — routed per-run by task complexity</td><td>Claude Agent SDK</td></tr>
+            <tr><td class="k">Planner</td><td>Opus 5 / Fable 5 - routed per-run by task complexity</td><td>Claude Agent SDK</td></tr>
             <tr><td class="k">Builder</td><td>GPT-5.6 Sol</td><td>Pi</td></tr>
             <tr><td class="k">Reviewer · Documenter</td><td>your call (TBD)</td><td>SDK or Pi, by model</td></tr>
           </tbody>
         </table>
       </div>
       <p style="font-size:11.5px;color:var(--text3);margin:10px 0 0">This split is exactly <b>why D1 = both</b>: Claude planners (Opus 5 / Fable 5) run through the Agent SDK; GPT-5.6 Sol builds through Pi. The engine picks the model per <code>ph.call()</code>, so "Opus vs Fable by complexity" is just a per-run branch on the planner phase.</p>
-      <p style="font-size:11.5px;color:var(--text3);margin:10px 0 0">This turns SSSF's stubbed <code>agent_cc.py</code> into a real integration and keeps Pi behind the same abstraction. Herdr can ride along later as an optional way to watch live runs in a terminal — orthogonal to the engine. Verified against the Agent SDK docs (Python: <code>claude-agent-sdk</code>; TS: <code>@anthropic-ai/claude-agent-sdk</code>). The headless CLI (<code>claude -p --output-format stream-json</code>) is the fallback only if the engine ever needs a non-Python driver.</p>
+      <p style="font-size:11.5px;color:var(--text3);margin:10px 0 0">This turns SSSF's stubbed <code>agent_cc.py</code> into a real integration and keeps Pi behind the same abstraction. Herdr can ride along later as an optional way to watch live runs in a terminal - orthogonal to the engine. Verified against the Agent SDK docs (Python: <code>claude-agent-sdk</code>; TS: <code>@anthropic-ai/claude-agent-sdk</code>). The headless CLI (<code>claude -p --output-format stream-json</code>) is the fallback only if the engine ever needs a non-Python driver.</p>
     </div>
   </section>
 
@@ -453,9 +453,9 @@
         <thead><tr><th>Risk</th><th>Sev</th><th>Mitigation</th></tr></thead>
         <tbody>
           <tr><td class="k">Python ↔ TS schema drift</td><td class="sev hi">HIGH</td><td>Generate TS row types from the Pydantic/SQLite schema; the db definition is the single source. This is the #1 thing Phase 0 must nail.</td></tr>
-          <tr><td class="k">Web process launching subprocess agents</td><td class="sev hi">HIGH</td><td>Local-only; auth middleware already fails closed; decouple via <code>run_queue</code> so the cockpit never spawns processes itself. (Deferred to Phase 2 — not in v1.)</td></tr>
+          <tr><td class="k">Web process launching subprocess agents</td><td class="sev hi">HIGH</td><td>Local-only; auth middleware already fails closed; decouple via <code>run_queue</code> so the cockpit never spawns processes itself. (Deferred to Phase 2 - not in v1.)</td></tr>
           <tr><td class="k">Claude Code backend is a stub in SSSF</td><td class="sev med">MED</td><td>Resolved direction: build <code>agent_cc.py</code> against the <b>Agent SDK</b> (<code>claude-agent-sdk</code>), reusing its native resume / permission / cost primitives. Budget real integration work; keep Pi behind the same abstraction.</td></tr>
-          <tr><td class="k">SQLite write contention</td><td class="sev lo">LOW</td><td>Already handled — WAL + <code>synchronous=NORMAL</code> + <code>busy_timeout</code>. Cockpit only writes to <code>run_queue</code>.</td></tr>
+          <tr><td class="k">SQLite write contention</td><td class="sev lo">LOW</td><td>Already handled - WAL + <code>synchronous=NORMAL</code> + <code>busy_timeout</code>. Cockpit only writes to <code>run_queue</code>.</td></tr>
           <tr><td class="k">Polling latency vs true real-time</td><td class="sev lo">LOW</td><td>500ms rowid polling is fine through Phase 4; SSE is a deliberate Phase 5 upgrade, not a rewrite.</td></tr>
         </tbody>
       </table>
@@ -463,7 +463,7 @@
   </section>
 
   <div class="foot">
-    <p><b>Decisions locked</b> — D1 both backends (CC via Agent SDK) · D2 hybrid seam · D3 monorepo · D4 v1 = observe-first · D5 name = Atelier. · Design source: <span class="src">#2 — matched the subject product</span> — rendered in FounderOS's real "Monolith Signal" tokens so the plan previews Atelier's look. · Claims verified against <code>super-simple-software-factory</code>, <code>FounderOS-DEMO</code>, a live walk of the app, and the Claude Agent SDK docs. · Next: Phase 0 scaffold — say the word and I'll start.</p>
+    <p><b>Decisions locked</b> - D1 both backends (CC via Agent SDK) · D2 hybrid seam · D3 monorepo · D4 v1 = observe-first · D5 name = Atelier. · Design source: <span class="src">#2 - matched the subject product</span> - rendered in FounderOS's real "Monolith Signal" tokens so the plan previews Atelier's look. · Claims verified against <code>super-simple-software-factory</code>, <code>FounderOS-DEMO</code>, a live walk of the app, and the Claude Agent SDK docs. · Next: Phase 0 scaffold - say the word and I'll start.</p>
   </div>
 
 </div>
