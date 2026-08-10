@@ -264,9 +264,41 @@ the guard holds.
 
 | Track | Result | Evidence (adw_id / sandbox id / branch / PR) |
 | --- | --- | --- |
-| A. cockpit feature end-to-end (sandbox → gates → PR) | ` ` | |
-| B. cockpit bugfix (closes a review finding) | ` ` | |
-| C. scout recon → build under same adw_id | ` ` | |
-| D. two concurrent self-builds, isolated | ` ` | |
-| E. engine task hits protected_files rollback (guard holds) | ` ` | |
-| Landing: real GitHub PR opened + merged | ` ` | |
+| A. cockpit feature end-to-end (sandbox → gates → PR) | **PASS** | adw `224a74f0` / sandbox `5953668e` / `feat/copy-branch-button` / PR #29 **merged** (`bca857f`). 9/9 phases green; spec landed in the worktree. |
+| B. cockpit bugfix (closes a review finding) | **PASS** | adw `85838b5b` / sandbox `f5b0c68b` / `fix/sandbox-purpose-with-branch` / PR #32 (open). Fixed `NewSandboxButton` purpose-drop + added `control.test.ts` coverage. |
+| C. scout recon → build under same adw_id | **PASS** (direct CLI) | adw `082564d4` - **one session** holds scout (recon) + plan/build/verify/commit; context carried via the shared `--adw-id` (builder reused the "existing no-runs empty state" the scout mapped). Branch `dogfood/track-c` / commit `a10d714` (typed missing-db signal → friendly empty state). |
+| D. two concurrent self-builds, isolated | **PASS** | Two sandboxed `*_quality` runs launched back-to-back, executed **simultaneously** under `--concurrency 2` (both `running` in the same trace snapshot). **D1:** adw `38c817d2` / sandbox `8a83bf57` / `feat/nav-tooltips` / port **53497** / commit `05fd6f0` (9/9 green) / **PR #33**. **D2:** adw `a4cfdd2c` / sandbox `82ace5ea` / `chore/conductor-launch-aria-label` / port **53528** / commit `8902210` (9/9 green) / **PR #34**. Isolation confirmed: two worktrees under `~/.atelier/worktrees/atelier/`, two branches, two `WEB` ports, two independent traces, zero collision. Both landed via the sandbox `land: pr` hook, then both sandboxes shut down (branches survive in `.git`). |
+| E. engine task hits protected_files rollback (guard holds) | **PASS** (run failing IS the success) | adw `69cbeeb5` / sandbox `24e1e4f6` / branch `docs/gate-violation-comment`. Task asked the builder to add a one-line comment to `engine/adws/adw_modules/gates.py`. `plan` succeeded; `build` **failed** on a `permission_breach`: *"builder is barred from ['engine/adws/adw_modules/', 'engine/adws/adw_sssf_config/', 'engine/adws/adw_*.py'] but modified 1 path(s): engine/adws/adw_modules/gates.py - rolled back"*. Worktree diff empty afterward (rollback clean), no commit landed. |
+| Landing: real GitHub PR opened + merged | **PASS** | Sandbox **Land** hook (`land: pr`) exercised end-to-end: the worker pushes the branch + runs `gh pr create --fill` in the worktree → PR #29 (merged), PR #32, and the two Track D PRs #33/#34 - all opened by the hook, none by hand. PR title **and** body populate correctly (the commit-message/PR-description fix landed). |
+
+### Findings from this run
+
+- **Engine bug found + fixed via the dogfood (the headline result).** The first sandboxed *planning*
+  chain failed at the plan phase: the planner wrote its `specs/` copy into the **main repo**, not the
+  worktree, so the `artifacts_exist` gate rejected it (adw `bc4e07a2`, then `95db4214` with no residue
+  - reproduced). Root cause: a two-roots collision - `cwd`/`repo_root` = the worktree but
+  `context_handoff_dir` was anchored at `SSSF_TRACE_ROOT` = the main repo, and the planner was handed
+  only that one absolute path. Fixed by giving agents an explicit `{{repo_root}}` (execution root)
+  template var, distinct from `{{context_handoff_dir}}` (trace root); planner + documenter now anchor
+  repo copies at `<repo_root>/…`. Shipped as PR #28 (`c1c1bbb`), released v0.3.1. This is exactly a §E
+  case - an engine change, done by hand because the engine is `protected_files`.
+- **Known gotcha confirmed:** a direct CLI launch (`uv run adws/adw_*.py`) does **not** run in a
+  sandbox - it executes at the repo root and commits to the current branch. Sandbox binding happens
+  only through the queue + worker (cockpit "＋ new sandbox" or an enqueue with a `sandbox_id`).
+- **Limitation surfaced by Track C:** the enqueue spec has no `adw_id` field and the worker mints a
+  fresh id per run, so **sandbox binding and `--adw-id` context-carry are mutually exclusive today** -
+  a scout→build chain that shares a session (Track C) can only run direct-CLI. Track C was therefore
+  run on a throwaway `dogfood/track-c` branch (scout is read-only; only the build commits). A future
+  enhancement could let an enqueue attach to an existing session/sandbox for context carry.
+- **The `protected_files` guard holds under a real self-build (Track E).** Asked to add a one-line
+  comment to `engine/adws/adw_modules/gates.py`, the builder made the edit and `permissions.py::enforce`
+  caught it *after* the agent call: the write was **rolled back** and the `build` phase hard-failed with
+  a `permission_breach` naming the barred globs. The worktree diff was empty afterward - the factory
+  refuses to edit its own grader, and the "failing" run is the proof. No feedback loops back to the agent
+  for a protected-path breach (unlike a gate rejection); it is a terminal hard-fail by design.
+- **Concurrency is real and isolation is clean (Track D).** Two `*_quality` self-builds launched
+  back-to-back ran **simultaneously** under `--concurrency 2` - both `running` in the same trace snapshot,
+  in two separate worktrees on two branches (`feat/nav-tooltips`, `chore/conductor-launch-aria-label`)
+  with two distinct `WEB` ports (53497, 53528) and two independent traces. Both passed the full `quality:`
+  gate (typecheck + contract + vitest + pytest) 9/9 and committed to their own branch - zero collision.
+  This is the everyday value: several isolated improvements to Atelier in flight at once.
