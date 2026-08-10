@@ -90,7 +90,9 @@ intent — no page ever spawns a process.
   worktree) — shutdown reclaims the working tree, not the work.
 
 Worktrees live **outside the repo** at `~/.atelier/worktrees/<project>/<sandbox-id>` (no
-`.gitignore` churn; `git rev-parse --show-toplevel` still resolves inside them). The provision /
+`.gitignore` churn; `git rev-parse --show-toplevel` still resolves inside them). `<project>` is
+`sandbox.project_name` when set, else the repo's git-common-dir identity (so a bare-repo/worktree
+layout namespaces by the shared repo name, not the working-tree basename). The provision /
 services / land hooks log **beside** the worktree at `<sandbox-id>.provision.log` — never inside
 it, so provision artifacts never surface as untracked files in the sandbox's own diff.
 

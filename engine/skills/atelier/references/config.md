@@ -235,6 +235,7 @@ every run is `local` (the repo root, byte-identical to today).
 ```yaml
 sandbox:
   default: local                 # level a launch uses when it doesn't override
+  project_name: myapp            # optional — names ~/.atelier/worktrees/<project_name>/
   namer:                         # human-readable branch from a sandbox's optional `purpose`
     enabled: true
     model: anthropic/claude-haiku-4-5
@@ -258,6 +259,7 @@ sandbox:
 | Field | Meaning |
 |---|---|
 | `default` | Level the cockpit's create picker preselects: `local` (no worktree) · `worktree` (L1, write isolation) · `worktree_env` (L2, + deps/ports/services/env). The level vocabulary is a **bounded seam enum** (shared with the cockpit); provisioning and landing are per-project. `default: local` preselects `worktree` (a sandbox row is always provisionable). |
+| `project_name` | **Optional.** Names the worktrees namespace: sandboxes for this project live under `~/.atelier/worktrees/<project_name>/`. When unset, the worker derives it from the repo's **git common dir** identity, so a bare-repo/worktree layout (`tmu.git/master`) namespaces as `tmu` rather than the working-tree name `master`; a normal checkout keeps its repo-dir name (unchanged). Set it to pin an explicit, collision-free name — two projects whose working tree is named `master`/`main` would otherwise share a dir. Sanitized to a single filesystem-safe path segment. |
 | `namer` | Turn a sandbox's optional **`purpose`** (the create UI's "what's this for?") into a readable branch. `namer.enabled` (default true) + `namer.model` (default `anthropic/claude-haiku-4-5`): with a purpose and no explicit branch, the **worker** asks this cheap model once at provision for a slug (`feat/api-rate-limiting`), then slugifies/validates/dedupes it. `anthropic/*` → local `claude` CLI, else `pi` (same auth as the coding agents). Disabled/no purpose/any failure → `adw/<id>`; naming never blocks provisioning. |
 | `<level>:` | A profile block **keyed by level name** (`worktree_env` above). A project declares one per non-`local` level it uses. |
 | `branch` | The named branch the worktree checks out. Survives teardown in the shared `.git`. The template default `adw/${SANDBOX_ID}` applies when a sandbox is created **without** a `purpose`; with a purpose, `namer` supersedes it. |
