@@ -1,0 +1,363 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atelier — Operator Guide: Building with the /atelier skill</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<style>
+  :root{
+    --bg:#0a0a0a; --bg2:#0e0e0e; --surface:#111214; --surface2:#161719; --surface3:#1b1c1f;
+    --border:#1c1c1c; --border-strong:#2a2a2a; --hairline:#171717;
+    --text:#f2f2f2; --text2:#a0a0a0; --text3:#6a6a6a;
+    --accent:#f2f2f2;
+    --ok:#2fd36f; --warn:#ffb000; --err:#ff2d3f;
+    --ok-soft:color-mix(in oklab,var(--ok) 12%,transparent);
+    --warn-soft:color-mix(in oklab,var(--warn) 12%,transparent);
+    --err-soft:color-mix(in oklab,var(--err) 12%,transparent);
+    --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  *,*::before,*::after{box-sizing:border-box;}
+  :where(.grid,.flex)>*{min-width:0;}
+  :where(p,h1,h2,h3,h4,li,td,th,.badge){overflow-wrap:anywhere;}
+  html{background:var(--bg);}
+  body{
+    margin:0;font-family:var(--mono);color:var(--text);background:var(--bg);
+    font-size:13px;line-height:1.55;-webkit-font-smoothing:antialiased;letter-spacing:-0.01em;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:56px 28px 120px;}
+
+  .eyebrow{font-size:9.5px;font-weight:700;letter-spacing:0.32em;text-transform:uppercase;color:var(--text3);margin:0 0 10px;}
+  .eyebrow::before{content:"// ";color:var(--text3);}
+  h1{font-size:32px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;margin:0 0 4px;line-height:1.1;}
+  h1 .caret{display:inline-block;width:12px;height:25px;background:var(--err);margin-left:8px;transform:translateY(4px);animation:blink 1.1s steps(1) infinite;}
+  @keyframes blink{50%{opacity:0;}}
+  .subttl{font-size:10.5px;letter-spacing:0.24em;text-transform:uppercase;color:var(--text3);margin:0 0 18px;}
+  .lede{font-size:14.5px;color:var(--text2);max-width:80ch;margin:0 0 8px;line-height:1.6;}
+  .lede b{color:var(--text);font-weight:600;}
+
+  h2{font-size:10px;font-weight:700;letter-spacing:0.26em;text-transform:uppercase;color:var(--text2);
+     display:flex;align-items:center;gap:14px;margin:0 0 20px;}
+  h2 .n{color:var(--err);font-weight:700;}
+  h2::after{content:"";flex:1;height:1px;background:var(--border);}
+  section{margin-top:56px;}
+  h3{font-size:13px;font-weight:700;letter-spacing:0.01em;margin:0 0 8px;color:var(--text);text-transform:none;}
+  p{margin:0 0 12px;color:var(--text2);}
+  p b, li b{color:var(--text);font-weight:600;}
+  a{color:var(--text);text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--border-strong);}
+  code{font-family:var(--mono);font-size:11.5px;background:var(--surface2);border:1px solid var(--border);padding:1px 5px;color:#d6d6d6;white-space:nowrap;}
+  pre{background:var(--surface2);border:1px solid var(--border);padding:12px 14px;overflow-x:auto;margin:10px 0;font-size:11.5px;line-height:1.55;color:#d6d6d6;}
+  pre code{background:none;border:none;padding:0;white-space:pre;}
+  .cmt{color:var(--text3);}
+  .tok-ok{color:var(--ok);} .tok-warn{color:var(--warn);} .tok-err{color:var(--err);}
+
+  .card{border:1px solid var(--border);background:var(--surface);padding:18px 18px 16px;transition:border-color .15s;}
+  .card:hover{border-color:var(--border-strong);}
+  .grid{display:grid;gap:14px;}
+  .g2{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .g3{grid-template-columns:repeat(3,minmax(0,1fr));}
+  @media(max-width:760px){.g2,.g3{grid-template-columns:minmax(0,1fr);}}
+
+  .kicker{font-size:9px;font-weight:700;letter-spacing:0.22em;text-transform:uppercase;color:var(--text3);margin:0 0 10px;display:flex;gap:8px;align-items:center;}
+  .dot{width:6px;height:6px;flex:0 0 auto;display:inline-block;}
+  .dot.ok{background:var(--ok);} .dot.warn{background:var(--warn);} .dot.err{background:var(--err);} .dot.off{background:var(--text3);}
+
+  ul.tight{margin:8px 0 0;padding:0;list-style:none;}
+  ul.tight li{position:relative;padding:5px 0 5px 18px;color:var(--text2);border-top:1px solid var(--hairline);font-size:12.5px;}
+  ul.tight li:first-child{border-top:none;}
+  ul.tight li::before{content:"›";position:absolute;left:2px;top:5px;color:var(--text3);}
+
+  ol.steps{margin:8px 0 0;padding:0 0 0 0;list-style:none;counter-reset:s;}
+  ol.steps li{position:relative;padding:9px 0 9px 34px;border-top:1px solid var(--hairline);color:var(--text2);font-size:12.5px;counter-increment:s;}
+  ol.steps li:first-child{border-top:none;}
+  ol.steps li::before{content:counter(s,decimal-leading-zero);position:absolute;left:0;top:9px;color:var(--err);font-weight:700;font-size:10px;letter-spacing:0.06em;}
+
+  .badge{display:inline-flex;align-items:center;gap:5px;font-size:9px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;
+         border:1px solid var(--border-strong);padding:3px 7px;color:var(--text2);white-space:nowrap;}
+  .badge.green{color:var(--ok);border-color:color-mix(in oklab,var(--ok) 40%,var(--border));background:var(--ok-soft);}
+  .badge.red{color:var(--err);border-color:color-mix(in oklab,var(--err) 40%,var(--border));background:var(--err-soft);}
+  .badge.amber{color:var(--warn);border-color:color-mix(in oklab,var(--warn) 40%,var(--border));background:var(--warn-soft);}
+
+  .tbl-wrap{overflow-x:auto;border:1px solid var(--border);background:var(--surface);}
+  table{border-collapse:collapse;width:100%;font-size:12px;min-width:640px;}
+  th{font-size:9px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;color:var(--text3);text-align:left;
+     padding:11px 14px;border-bottom:1px solid var(--border);background:var(--bg2);position:sticky;top:0;}
+  td{padding:11px 14px;border-top:1px solid var(--hairline);color:var(--text2);vertical-align:top;}
+  tr:hover td{background:var(--surface2);}
+  td.k{color:var(--text);font-weight:600;white-space:nowrap;}
+
+  .callout{border:1px solid color-mix(in oklab,var(--ok) 34%,var(--border));background:linear-gradient(180deg,var(--ok-soft),transparent);padding:16px 18px;}
+  .callout h3{color:var(--ok);}
+  .callout.warn{border-color:color-mix(in oklab,var(--warn) 34%,var(--border));background:linear-gradient(180deg,var(--warn-soft),transparent);}
+  .callout.warn h3{color:var(--warn);}
+  .callout.err{border-color:color-mix(in oklab,var(--err) 34%,var(--border));background:linear-gradient(180deg,var(--err-soft),transparent);}
+  .callout.err h3{color:var(--err);}
+
+  .caption{font-size:11px;color:var(--text3);margin-top:8px;}
+  .zone td.sev{white-space:nowrap;font-weight:700;font-size:10px;letter-spacing:0.06em;}
+  .sev.hi{color:var(--err);} .sev.med{color:var(--warn);} .sev.lo{color:var(--ok);}
+
+  .phase{border:1px solid var(--border);background:var(--surface);margin-bottom:12px;}
+  .phase-head{display:flex;gap:12px;align-items:baseline;padding:13px 18px;border-bottom:1px solid var(--hairline);flex-wrap:wrap;}
+  .phase-tag{font-size:9px;font-weight:700;letter-spacing:0.14em;color:var(--bg);background:var(--text);padding:3px 8px;text-transform:uppercase;white-space:nowrap;}
+  .phase-title{font-size:13.5px;font-weight:700;color:var(--text);}
+  .phase-sub{font-size:11px;color:var(--text3);margin-left:auto;}
+  .phase-body{padding:12px 18px;}
+
+  /* example-prompt blocks: what you type → what the orchestrator does */
+  .ex{border:1px solid var(--border);background:var(--surface);margin:10px 0;}
+  .ex .say{padding:11px 14px;font-size:12.5px;color:var(--text);border-left:2px solid var(--ok);background:var(--surface2);}
+  .ex .say::before{content:"❯ ";color:var(--ok);font-weight:700;}
+  .ex .say .lbl{display:block;font-size:8.5px;font-weight:700;letter-spacing:0.2em;text-transform:uppercase;color:var(--text3);margin-bottom:5px;}
+  .ex .say .lbl::before{content:none;}
+  .ex .does{padding:10px 14px 12px;font-size:11.5px;color:var(--text2);border-top:1px solid var(--hairline);line-height:1.55;}
+  .ex .does .lbl{display:block;font-size:8.5px;font-weight:700;letter-spacing:0.2em;text-transform:uppercase;color:var(--text3);margin-bottom:5px;}
+  .ex .does b{color:var(--text);}
+
+  .foot{margin-top:60px;border-top:1px solid var(--border);padding-top:16px;font-size:10.5px;color:var(--text3);letter-spacing:0.02em;}
+  .src{display:inline-block;background:var(--surface2);border:1px solid var(--border);padding:2px 7px;color:var(--text2);}
+</style>
+
+<div class="wrap">
+
+  <p class="eyebrow">Atelier · Operator guide · Building with the /atelier skill</p>
+  <h1>The /atelier Skill<span class="caret"></span></h1>
+  <p class="subttl">You talk to the orchestrator · the orchestrator runs the factory</p>
+  <p class="lede"><code>/atelier</code> is the operator skill for driving the software factory in plain language. You describe the work; it translates your intent into a precise prompt, picks the right workflow, launches it, watches the trace, and reports back. It is a thin discipline layer with one firm boundary: <b>the orchestrator runs the system — it never does the coding work itself.</b> Teams of agents inside the workflows do that.</p>
+  <p class="lede" style="font-size:13px;">This guide is a working reference for prompting the skill: how it behaves, the shape of a good ask, a gallery of copy-paste examples, and a deep section on <b>spawning sandboxes</b> so a run lands on its own branch and opens a PR instead of committing to your working tree. New to the factory itself? Start with the <a href="atelier-usage-guide.html">field guide</a>.</p>
+
+  <!-- 01 WHAT IT IS -->
+  <section>
+    <h2><span class="n">01</span> What the skill is — and what it refuses to be</h2>
+    <p>Invoke it with <code>/atelier</code> (or just describe factory work: "run an ADW", "manage the roster", "spin up a sandbox"). It is an <b>orchestrator</b>. Its whole job is the loop below; everything it will and won't do follows from that.</p>
+    <div class="grid g2">
+      <div class="callout">
+        <h3>What it does</h3>
+        <ul class="tight">
+          <li><b>Translate</b> your ask into the prompt the workflow receives — clearer, not different</li>
+          <li><b>Choose</b> the workflow (ADW) whose shape fits the work, or the one you named</li>
+          <li><b>Launch</b> it — directly, or bound to a sandbox / the launch queue</li>
+          <li><b>Observe</b> the live trace in SQLite and report phase status plainly</li>
+          <li><b>Author &amp; tune</b> the factory: create workflows, retune the agent roster</li>
+        </ul>
+      </div>
+      <div class="callout err">
+        <h3>What it won't do</h3>
+        <ul class="tight">
+          <li><b>Do the work itself</b> — never plans, builds, or edits your app in an agent's place</li>
+          <li><b>Drop or soften a requirement</b> — your intent is carried forward verbatim</li>
+          <li><b>Swap rosters or models silently</b> — a different roster is a different cost and result; it asks</li>
+          <li><b>Fabricate a status</b> — it reads the real trace; a partial run is never dressed up as success</li>
+          <li><b>Touch the run record</b> — the session trace under <code>adws/adw_data/</code> is read-only to it</li>
+        </ul>
+      </div>
+    </div>
+    <p class="caption">The governing line, quoted from the skill: <b>"The intent is theirs. The precision is yours."</b> If it thinks a different workflow or model fits better, it says so in its own message and still launches what you asked for.</p>
+  </section>
+
+  <!-- 02 STARTUP -->
+  <section>
+    <h2><span class="n">02</span> First contact — what <code>/atelier</code> does when you invoke it</h2>
+    <p>On startup the orchestrator does exactly three things, then stops and waits for you. It deliberately does <i>not</i> volunteer a status dashboard, query past runs, or survey your repo — that would spend context on guesses before it knows the task.</p>
+    <ol class="steps">
+      <li><b>Reads the system map</b> — the overview cookbook that describes the factory and the stamped layout.</li>
+      <li><b>Lists the workflows on disk</b> — <code>ls adws/adw_*.py</code> and each script's one-line <code>Phases:</code> chain. The files are the only authority; it never launches from memory.</li>
+      <li><b>Prints them as a table</b> — name, chain, when to reach for it — and waits for your request.</li>
+    </ol>
+    <div class="tbl-wrap" style="margin-top:14px">
+      <table>
+        <thead><tr><th>ADW</th><th>Chain</th><th>Reach for it when</th></tr></thead>
+        <tbody>
+          <tr><td class="k">adw_scout</td><td>engineer → scout</td><td>read-only recon; nothing changes</td></tr>
+          <tr><td class="k">adw_plan</td><td>engineer → plan</td><td>you want the plan to read before any build</td></tr>
+          <tr><td class="k">adw_plan_build_test</td><td>plan → build → test</td><td>a real change with a verify gate</td></tr>
+          <tr><td class="k">adw_simple_sdlc</td><td>plan → build → test → review → document, commits as it goes</td><td>the work is real and its shape is not obvious</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="caption">Illustrative rows — the actual menu is whatever your repo's <code>adws/</code> holds, read fresh each session. If the factory isn't installed, it says so in one line instead of the table.</p>
+  </section>
+
+  <!-- 03 HOW TO PROMPT -->
+  <section>
+    <h2><span class="n">03</span> How to prompt it — the four-line shape</h2>
+    <p>You can talk to it however you like; it will sharpen your words for you. But the more precise your ask, the less it has to infer — and the prompt it builds is read by <i>every agent in the chain</i>, so precision compounds. When it matters, give it the four lines it's aiming for anyway:</p>
+<pre><code>&lt;the ask — one imperative sentence&gt;
+Where: &lt;the files or dirs involved&gt;
+Done means: &lt;the observable result — a response shape, a passing test, a rendered element&gt;
+Out of scope: &lt;what should NOT change, named so nobody adds it&gt;</code></pre>
+    <div class="grid g2" style="margin-top:6px">
+      <div class="card">
+        <p class="kicker"><span class="dot warn"></span> Vague — makes it guess</p>
+        <p style="font-size:12px;margin:0;color:var(--text2)">"can we get tags on posts, sorted by popularity"</p>
+        <p style="font-size:11px;margin:8px 0 0;color:var(--text3)">"Popularity" could be a sort, a score, a UI. No files, no stopping point. The chain pays for every ambiguity.</p>
+      </div>
+      <div class="card">
+        <p class="kicker"><span class="dot ok"></span> Sharp — one reading only</p>
+        <p style="font-size:12px;margin:0;color:var(--text2)">"Add <code>GET /api/tags</code> returning <code>{tag, count}</code> across all posts, sorted by count desc then tag asc."</p>
+        <p style="font-size:11px;margin:8px 0 0;color:var(--text3)">Same idea, same scope — but "popularity" is now a sort order and the endpoint shape is fixed.</p>
+      </div>
+    </div>
+    <div class="callout" style="margin-top:14px">
+      <h3>Say WHAT and DONE, not HOW</h3>
+      <p style="font-size:12px;margin:0;color:var(--text2)">Leave the plan to the planner unless you have an opinion — if you do, state it and the orchestrator carries it word for word. And don't address the harness in your ask ("use the reviewer", "retry twice", "then commit"): those are <i>chain</i> choices, decided by <b>which workflow runs</b>, not by prose the agents would read. Want a review phase? Ask for a workflow that ends in one.</p>
+    </div>
+  </section>
+
+  <!-- 04 PROMPT GALLERY -->
+  <section>
+    <h2><span class="n">04</span> Prompt gallery — the everyday moves</h2>
+    <p>Copy, adapt, send. Each block shows what you'd type and what the orchestrator does with it. It always reports back the exact prompt it sent, the workflow it chose, and the <code>adw_id</code> so you can watch.</p>
+
+    <div class="ex">
+      <div class="say"><span class="lbl">You say</span>Where does rate limiting live in the API? Just look — change nothing.</div>
+      <div class="does"><span class="lbl">Orchestrator</span>Recognises a question, launches a <b>read-only recon</b> workflow (<code>adw_scout</code>), and reports the findings. No file is touched — the scout's write boundary is empty.</div>
+    </div>
+
+    <div class="ex">
+      <div class="say"><span class="lbl">You say</span>Plan a <code>GET /api/tags</code> endpoint returning <code>{tag, count}</code> sorted by count desc. Don't build yet — I want to read the plan first.</div>
+      <div class="does"><span class="lbl">Orchestrator</span>Launches <b>plan-only</b> (<code>adw_plan</code>), prints the <code>adw_id</code>, and surfaces the plan envelope. Nothing lands but <code>specs/</code>.</div>
+    </div>
+
+    <div class="ex">
+      <div class="say"><span class="lbl">You say</span>Good, build that plan.</div>
+      <div class="does"><span class="lbl">Orchestrator</span>Resumes the <b>same session</b> with a build-first chain <code>--adw-id &lt;same&gt;</code>, so the builder inherits the planner's context and handoff files intact. This is how you chain workflows across turns.</div>
+    </div>
+
+    <div class="ex">
+      <div class="say"><span class="lbl">You say</span>Small, well-understood change: add a <code>/health</code> endpoint that returns <code>200 {status:"ok"}</code>, with a test. Take it end to end.</div>
+      <div class="does"><span class="lbl">Orchestrator</span>Picks a complete chain (<code>adw_plan_build_test</code> or <code>adw_simple_sdlc</code>) — plan, build, verify against the test gate, and for the fuller chain, review and document, committing as it goes.</div>
+    </div>
+
+    <div class="ex">
+      <div class="say"><span class="lbl">You say</span>Have Opus plan this one, then build on the default roster.</div>
+      <div class="does"><span class="lbl">Orchestrator</span>Resolves "Opus" to the roster whose planner is that model (<code>--config &lt;that&gt;.config.yaml</code>) and names it back to you. It <b>warns</b> that switching rosters mid-session starts the builder fresh (a joined run can't resume an agent created on a different model) — deliberate, but you lose the builder's accumulated context.</div>
+    </div>
+
+    <div class="ex">
+      <div class="say"><span class="lbl">You say</span>How's the tags run doing?</div>
+      <div class="does"><span class="lbl">Orchestrator</span>Queries the live trace (<code>just phases &lt;id&gt;</code> / <code>just tail &lt;id&gt;</code>) and reports which phase is running, the sequence so far, and any gate violations verbatim — never a guess.</div>
+    </div>
+
+    <p class="caption">Long ask? The orchestrator writes it to <code>requests/&lt;slug&gt;.md</code> and passes the path — every workflow accepts inline text or a file. It asks at most one clarifying question, and only when two readings would produce different code.</p>
+  </section>
+
+  <!-- 05 SANDBOXES -->
+  <section>
+    <h2><span class="n">05</span> Spawning sandboxes — runs on their own branch</h2>
+    <p>By default a run executes at the repo root and commits to your current branch. A <b>sandbox</b> quarantines it instead: an isolated, persistent git worktree on a named branch, provisioned once and reused across runs. The run's trace still lands in the shared db, so you observe it identically — but its file changes never touch your working tree, and a <code>land</code> hook can open a PR when you're happy.</p>
+
+    <div class="callout warn">
+      <h3>Isolation is opt-in — you must ask for it</h3>
+      <p style="font-size:12px;margin:0;color:var(--text2)">A plain "run this" goes to the <b>repo root, on your current branch</b>. To get a sandbox, <b>say so</b> — "in a sandbox", "on its own branch", "open a PR". Sandbox-bound runs go through the launch queue, so a <b>worker must be draining it</b> (<code>just worker</code>); the worker is the only thing that provisions a worktree and turns a queued row into a live run. The orchestrator never spawns a process or touches a worktree itself — it writes the intent; the worker disposes.</p>
+    </div>
+
+    <p class="kicker" style="margin-top:18px"><span class="dot ok"></span> Create-and-run in one step — the common case</p>
+    <div class="ex">
+      <div class="say"><span class="lbl">You say</span>Build the <code>/api/tags</code> endpoint in a new sandbox — plan, build, test, and open a PR when it's green.</div>
+      <div class="does"><span class="lbl">Orchestrator</span>Creates a sandbox <b>and</b> enqueues the run into it in one transaction (no orphan if enqueue is rejected). Your request doubles as the sandbox <b>purpose</b>, so a cheap namer model turns it into a readable branch like <code>feat/api-tags-endpoint</code>. The worker provisions the worktree, runs the chain with <code>cwd=&lt;worktree&gt;</code>, and on green the <code>land</code> hook pushes the branch and opens the PR. You get the PR URL back.</div>
+    </div>
+
+    <p class="kicker" style="margin-top:16px"><span class="dot ok"></span> Name the branch yourself</p>
+    <div class="ex">
+      <div class="say"><span class="lbl">You say</span>Run this in a sandbox on branch <code>feature/PROJ-233_tag-counts</code>.</div>
+      <div class="does"><span class="lbl">Orchestrator</span>Passes the branch <b>verbatim</b> (it wins over an auto-named purpose). The worker checks it out if it exists, else forks it off HEAD. Use this for ticket conventions the namer can't produce — it only emits lowercase <code>feat/fix/chore/docs</code> names.</div>
+    </div>
+
+    <p class="kicker" style="margin-top:16px"><span class="dot ok"></span> Ask for a fuller environment (Level 2)</p>
+    <div class="ex">
+      <div class="say"><span class="lbl">You say</span>This needs the test database and its own port — run it in a full <code>worktree_env</code> sandbox.</div>
+      <div class="does"><span class="lbl">Orchestrator</span>Requests the L2 level, which provisions the worktree <b>plus</b> isolated deps, allocated ports, backing services (<code>services.up</code>), and scoped env — once, at create. Requires the project to declare a <code>worktree_env</code> profile in its <code>sandbox:</code> config; if it doesn't, the orchestrator says so rather than pretending.</div>
+    </div>
+
+    <div class="tbl-wrap" style="margin-top:6px">
+      <table>
+        <thead><tr><th>Level</th><th>Buys you</th><th>Provisioning</th></tr></thead>
+        <tbody>
+          <tr><td class="k">local <span class="badge" style="margin-left:6px">default</span></td><td>nothing — runs at the repo root, exactly as a direct launch</td><td>none</td></tr>
+          <tr><td class="k">worktree <span class="badge">L1</span></td><td>write isolation: a persistent branch workspace</td><td><code>git worktree add</code> on a named branch</td></tr>
+          <tr><td class="k">worktree_env <span class="badge">L2</span></td><td>the above + isolated deps, per-sandbox ports, services, scoped env</td><td>+ <code>setup</code>, allocated <code>ports</code>, <code>services.up</code>, injected <code>env</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="kicker" style="margin-top:16px"><span class="dot ok"></span> Parallel work — two sandboxes, not two runs in one</p>
+    <div class="ex">
+      <div class="say"><span class="lbl">You say</span>Spin up two sandboxes — one for the tags endpoint, one for the search fix — and run them side by side.</div>
+      <div class="does"><span class="lbl">Orchestrator</span>Creates two sandboxes and enqueues one run into each. <b>Parallelism is across sandboxes</b>; two runs in the <i>same</i> tree would re-introduce the write collision isolation exists to remove, so same-sandbox runs serialize by design.</div>
+    </div>
+
+    <p class="kicker" style="margin-top:16px"><span class="dot ok"></span> Iterate, then land or tear down</p>
+    <div class="ex">
+      <div class="say"><span class="lbl">You say</span>The tags branch looks good — land it. And shut down the search sandbox, I've merged that one.</div>
+      <div class="does"><span class="lbl">Orchestrator</span>Flips <code>land_requested</code> on the first (worker runs the <code>land</code> hook once in the worktree — <code>pr</code> / <code>merge</code> / <code>manual</code> — then returns it to <code>active</code>; <b>landing never destroys anything</b>) and <code>shutdown_requested</code> on the second (worker runs <code>services.down</code>, removes the worktree, marks it <code>gone</code>). <b>Shutdown is the only teardown</b> — and the branch and its commits survive in <code>.git</code>; shutdown reclaims the working tree, not the work.</div>
+    </div>
+
+    <div class="callout" style="margin-top:12px">
+      <h3>The sandbox lifecycle, in one line</h3>
+<pre style="margin:6px 0 8px;background:transparent;border:none;padding:0;"><code>request → provisioning → active ⇄ (run, run, run…) ⇄ landing → shutting_down → gone</code></pre>
+      <p style="font-size:11.5px;margin:0;color:var(--text2)">A sandbox <b>outlives every run it hosts</b> — real feature work is iterative (run, inspect, run again in the same warm tree). Ask the orchestrator "what sandboxes are active?" and it reads the <code>sandboxes</code> table: id, level, status, branch, and the last land result.</p>
+    </div>
+  </section>
+
+  <!-- 06 AUTHORING & TUNING -->
+  <section>
+    <h2><span class="n">06</span> Beyond running — authoring and tuning the factory</h2>
+    <p>The orchestrator doesn't only launch what exists; it helps you shape the factory itself. These edits are deliberate and reviewable — a new workflow script, a roster change — never improvised mid-run.</p>
+    <div class="grid g2">
+      <div class="card">
+        <p class="kicker"><span class="dot ok"></span> Compose a new workflow</p>
+        <div class="ex" style="margin:0">
+          <div class="say" style="font-size:12px">I keep wanting plan → build → test, no review or docs. Make me that chain.</div>
+          <div class="does" style="font-size:11px">Writes a new thin <code>adw_*.py</code> composing those phases, following the hard rules (typed envelopes, gates validate claims, every phase earns a one-sentence description).</div>
+        </div>
+      </div>
+      <div class="card">
+        <p class="kicker"><span class="dot ok"></span> Retune the roster</p>
+        <div class="ex" style="margin:0">
+          <div class="say" style="font-size:12px">Give the reviewer more thinking budget and point the builder at a stronger model.</div>
+          <div class="does" style="font-size:11px">Surgically edits <code>sssf.config.yaml</code> — one field, one line diff, comments intact. Re-validated by the engine at run time.</div>
+        </div>
+      </div>
+      <div class="card">
+        <p class="kicker"><span class="dot ok"></span> Scope an agent's reach</p>
+        <div class="ex" style="margin:0">
+          <div class="say" style="font-size:12px">Keep any builder out of <code>database/migrations/</code> and auth.</div>
+          <div class="does" style="font-size:11px">Adds those to <code>protected_files</code> — enforced after every agent call in <code>permissions.py</code>; unauthorised writes are rolled back and the phase dies.</div>
+        </div>
+      </div>
+      <div class="card">
+        <p class="kicker"><span class="dot ok"></span> Keep the engine current</p>
+        <div class="ex" style="margin:0">
+          <div class="say" style="font-size:12px">Pull the latest Atelier engine improvements into this repo.</div>
+          <div class="does" style="font-size:11px">Runs the updater, which moves only managed engine files by content hash and parks any conflict as <code>&lt;file&gt;.atelier-new</code> — your roster and prompts are never touched.</div>
+        </div>
+      </div>
+    </div>
+    <div class="callout warn" style="margin-top:14px">
+      <h3>Backends, briefly</h3>
+      <p style="font-size:12px;margin:0;color:var(--text2)">Each agent runs on <code>claude_code</code> (the default — Claude via the Agent SDK using your local <code>claude</code> CLI login, <b>no API key</b>; starter roster is <code>anthropic/claude-sonnet-5</code>) or <code>pi</code> (non-Anthropic models via the <code>pi</code> CLI). Any <code>anthropic/*</code> model is <b>always</b> routed through <code>claude_code</code> — the roster can't mis-route it. Your repo's root <code>AGENTS.md</code> (else <code>CLAUDE.md</code>) is injected into each claude_code agent so it sees your project's conventions.</p>
+    </div>
+  </section>
+
+  <!-- 07 OBSERVE & REPORT -->
+  <section>
+    <h2><span class="n">07</span> After launch — how it watches and what you get back</h2>
+    <p>Once a run is launched, the orchestrator reads the same live SQLite trace the cockpit does (WAL mode — reads never block the running agents) and narrates it. Its report, in order:</p>
+    <ul class="tight" style="max-width:80ch">
+      <li><b>The prompt it actually sent</b>, verbatim — so a bad translation dies in seconds, not at the commit phase</li>
+      <li><b>The workflow it chose</b> and the one-line reason (or that it used the one you named), plus the roster if it wasn't the default</li>
+      <li><b>The <code>adw_id</code></b> — everything keys off it: <code>just phases &lt;id&gt;</code>, <code>just tail &lt;id&gt;</code>, <code>just procs &lt;id&gt;</code></li>
+      <li><b>Phase status in sequence</b>, and for a failure, the gate violations or error verbatim</li>
+    </ul>
+    <div class="callout" style="margin-top:12px">
+      <h3>Reading run health honestly</h3>
+      <p style="font-size:12px;margin:0;color:var(--text2)"><b>Every phase defaults to <code>fail</code></b> and must earn success — a clean exit flips it, and an agent phase additionally needs its envelope to parse and all gates green. So a phase showing <code>fail</code> may simply never have completed, and <code>queued</code> means it never started. The orchestrator won't dress a partial run up as a success. For a visual view, register the repo in the central <b>cockpit</b> (<code>atelier.projects.json</code>) and watch runs as swim lanes; the <code>just</code> recipes are the headless equivalent.</p>
+    </div>
+  </section>
+
+  <div class="foot">
+    <p><b>Operator guide</b> — a companion to the <a href="atelier-usage-guide.html">field guide</a> and the <a href="atelier-plan.html">build plan</a>. · The skill and its cookbooks live in the repository under <code>.claude/skills/atelier/</code>. · Prompt for intent and precision; say "in a sandbox" when you want isolation; let the orchestrator run the system while the agents inside do the work.</p>
+  </div>
+
+</div>
