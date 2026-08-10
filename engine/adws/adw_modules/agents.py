@@ -134,6 +134,16 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
         "prompt": call.prompt,
         "previous_envelope": call.previous.model_dump_json(indent=2) if call.previous else "(none)",
         "context_handoff_dir": str(run.context_handoff_dir),
+        # Two roots, deliberately distinct. `context_handoff_dir` anchors at the
+        # TRACE root (SSSF_TRACE_ROOT, the shared main repo) - it is observability.
+        # `repo_root` is the EXECUTION root (cwd; the worktree under a sandbox run) -
+        # it is where agents write code. A repo copy (specs/, app_docs/) declared
+        # relative would resolve against cwd for the gate but against whatever root
+        # the agent inferred from the one absolute path it was handed - and being
+        # handed only the main-repo handoff path, a sandboxed agent wrote the copy
+        # into the main repo while the gate looked in the worktree. Hand it the
+        # worktree root explicitly so the copy lands where the gate checks.
+        "repo_root": str(run.repo_root),
     }
     # Anchor prompt reads at trace_root() (SSSF_TRACE_ROOT or cwd) - see validate():
     # a sandbox run's cwd is the worktree, but the roster's prompt assets live in the

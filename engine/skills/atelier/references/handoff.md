@@ -85,7 +85,8 @@ Re-prompting is backend-neutral: an agent call re-prompts within the agent's **l
 |---|---|
 | `{{prompt}}` | the engineer's ask (or the ADW's per-call prompt) |
 | `{{previous_envelope}}` | the upstream envelope JSON, from `AgentCall(previous=...)` |
-| `{{context_handoff_dir}}` | absolute path to this session's `context_handoff/` |
+| `{{context_handoff_dir}}` | absolute path to this session's `context_handoff/` — the **trace** root (`SSSF_TRACE_ROOT`, the shared main repo under a sandbox run) |
+| `{{repo_root}}` | absolute path to the codebase being worked in — the **execution** root (cwd; the worktree under a sandbox run). Repo copies (`specs/`, `app_docs/`) must anchor here, not at `context_handoff_dir`, or a sandboxed run writes them into the wrong tree |
 
 A `user.md` declares one h3 per incoming datum, then the task, then the output contract:
 

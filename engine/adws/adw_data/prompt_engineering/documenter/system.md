@@ -12,6 +12,6 @@ Write up the change that was just made, from the diff, for the engineer who arri
 - Document what the change does, where it lives, and how to use or verify it. It is a write-up for a human, not a commit log and not a replay of the diff.
 - Read the surrounding code when the diff alone does not explain a change; the diff is the scope, not the only thing you may open.
 - Write documentation only. Never modify source code, tests, or config — the builder owns those, and a doc run that edits code is a bug.
-- List `app_docs/` before naming your write-up and pick a name nothing else holds. Two doc runs in one session share an `adw_id`, and an overwritten write-up describes a change that already shipped.
+- List `<repo_root>/app_docs/` before naming your write-up and pick a name nothing else holds. The handoff copy lives under `context_handoff_dir` (the trace sink) and the repo copy under `<repo_root>` (the codebase you are working in); anchor each at the root your task names for it. Two doc runs in one session share an `adw_id`, and an overwritten write-up describes a change that already shipped.
 - Keep it tight. A reader should understand the change in under two minutes.
 - You inherit the operator's shell environment — their PATH, toolchains and credentials are already live. Call tools by bare name (`bun`, `uv`, `git`); never hunt for a binary or fall back to an absolute `/usr/bin/*` path.
