@@ -7,10 +7,13 @@ model is caught too. A mis-route fails only at dispatch, so pin it here.
 from __future__ import annotations
 
 import textwrap
+from types import SimpleNamespace
 
 import pytest
 
 from adw_modules import agents
+from adw_modules.data_types import (AgentConfig, BuildOutput, ContinuationConfig,
+                                    PromptEngineering)
 
 
 def _cfg(tmp_path, text: str) -> str:
@@ -56,6 +59,211 @@ def test_non_anthropic_stays_pi(tmp_path):
             prompt_engineering: {system: s.md, user: u.md}
     """))
     assert _by_name(cfg, "builder").coding_agent == "pi"
+
+
+# ── the chained builder (context-window handoff) ─────────────────────────────
+
+def _fake_run(agent_map=None):
+    """A run stub with only what _chain / _instance_session_id / _synthesize touch."""
+    return SimpleNamespace(
+        adw_id="abc12345",
+        agent_map=agent_map or {},
+        repo_root="/tmp/repo",
+        console=SimpleNamespace(note=lambda *a, **k: None),
+        tracer=SimpleNamespace(event=lambda *a, **k: None),
+    )
+
+
+_PHASE = SimpleNamespace(phase_id="abc12345_02_build")
+
+
+class _Instances:
+    """Scripted run_instance: yields (envelope, result) per instance, in order,
+    and records the (prompt, instance) it was called with each time."""
+
+    def __init__(self, script):
+        self.script = script            # list of (envelope_or_None, overflowed_bool)
+        self.calls: list[tuple[str, int]] = []
+
+    def __call__(self, prompt, instance):
+        self.calls.append((prompt, instance))
+        envelope, overflowed = self.script[instance - 1]
+        return envelope, SimpleNamespace(overflowed=overflowed)
+
+
+def _build(**kw):
+    return BuildOutput(status=kw.pop("status", "success"), **kw)
+
+
+class TestChain:
+    def test_completes_first_instance_no_chaining(self):
+        env = _build(continuation="complete")
+        inst = _Instances([(env, False)])
+        synth = SimpleNamespace(n=0)
+        out = agents._chain(_fake_run(), _PHASE, ContinuationConfig(),
+                            "do the thing", inst, lambda: (synth.__setattr__("n", synth.n + 1), "S")[1])
+        assert out is env
+        assert len(inst.calls) == 1          # never chained
+        assert synth.n == 0                  # never synthesized
+
+    def test_cooperative_handoff_threads_into_next_prompt(self):
+        inst = _Instances([
+            (_build(continuation="needs_continuation", handoff="DID_A_NEED_B"), False),
+            (_build(continuation="complete"), False),
+        ])
+        out = agents._chain(_fake_run(), _PHASE, ContinuationConfig(),
+                            "ORIGINAL_TASK", inst, lambda: "SHOULD_NOT_BE_USED")
+        assert out.continuation == "complete"
+        assert len(inst.calls) == 2
+        second_prompt = inst.calls[1][0]
+        assert "DID_A_NEED_B" in second_prompt          # the agent's handoff
+        assert "ORIGINAL_TASK" in second_prompt         # plus the original task
+        assert "already applied" in second_prompt.lower()  # the standing continue note
+
+    def test_valve_overflow_synthesizes_a_handoff(self):
+        # A valve-killed instance returns (None, overflowed=True) - no cooperative
+        # envelope - so the backstop (git-diff) handoff must be synthesized instead.
+        inst = _Instances([(None, True), (_build(continuation="complete"), False)])
+        calls = {"n": 0}
+
+        def synth():
+            calls["n"] += 1
+            return "SYNTHESIZED_FROM_GIT"
+
+        out = agents._chain(_fake_run(), _PHASE, ContinuationConfig(),
+                            "ORIGINAL_TASK", inst, synth)
+        assert out.continuation == "complete"
+        assert calls["n"] == 1
+        assert "SYNTHESIZED_FROM_GIT" in inst.calls[1][0]
+
+    def test_empty_cooperative_handoff_falls_back_to_synth(self):
+        inst = _Instances([
+            (_build(continuation="needs_continuation", handoff="   "), False),
+            (_build(continuation="complete"), False),
+        ])
+        out = agents._chain(_fake_run(), _PHASE, ContinuationConfig(),
+                            "T", inst, lambda: "SYNTH_FALLBACK")
+        assert "SYNTH_FALLBACK" in inst.calls[1][0]
+        assert out.continuation == "complete"
+
+    def test_cap_enforced_fails_loudly(self):
+        never_done = [(_build(continuation="needs_continuation", handoff="h"), False)] * 3
+        inst = _Instances(never_done)
+        with pytest.raises(RuntimeError, match="after 3 instance"):
+            agents._chain(_fake_run(), _PHASE, ContinuationConfig(max_instances=3),
+                          "T", inst, lambda: "S")
+        assert len(inst.calls) == 3          # exactly the cap, no fourth instance
+
+    def test_fail_status_ends_chain_immediately(self):
+        # A genuine failure (status=fail, not asking to continue) is terminal -
+        # _chain returns it and execute() rules on the status.
+        env = _build(status="fail", continuation="complete")
+        inst = _Instances([(env, False)])
+        out = agents._chain(_fake_run(), _PHASE, ContinuationConfig(), "T", inst, lambda: "S")
+        assert out is env
+        assert len(inst.calls) == 1
+
+
+class TestInstanceSessionId:
+    def _agent(self):
+        return AgentConfig(name="builder", model="anthropic/claude-x",
+                           prompt_engineering=PromptEngineering(system="s.md", user="u.md"))
+
+    def test_instance_one_reuses_the_cross_phase_session(self):
+        agent = self._agent()
+        run = _fake_run(agent_map={"builder": {"session_id": "SESS-REUSE",
+                                               "model": "anthropic/claude-x"}})
+        assert agents._instance_session_id(run, agent, 1) == "SESS-REUSE"
+
+    def test_later_instances_get_fresh_windows(self):
+        agent = self._agent()
+        run = _fake_run(agent_map={"builder": {"session_id": "SESS-REUSE",
+                                               "model": "anthropic/claude-x"}})
+        s2 = agents._instance_session_id(run, agent, 2)
+        s3 = agents._instance_session_id(run, agent, 3)
+        # a fresh session is an empty window - the whole point - so never the reused one
+        assert s2 != "SESS-REUSE" and s3 != "SESS-REUSE"
+        assert s2 != s3
+        assert s2.startswith("sssf-abc12345-builder-")
+
+
+class TestContinuationSeed:
+    def test_seed_carries_task_handoff_and_note(self):
+        seed = agents._continuation_seed("ORIGINAL", "HANDOFF_BODY")
+        assert "ORIGINAL" in seed
+        assert "HANDOFF_BODY" in seed
+        assert "git diff" in seed              # the standing continue instruction
+
+
+class TestSynthesizeHandoff:
+    def _fake_git(self, diff="", untracked=""):
+        # _synthesize_handoff calls git_helper._git_at(root, "diff"|"ls-files", ...).
+        def _git_at(root, *args):
+            return diff if args[0] == "diff" else untracked
+        return _git_at
+
+    def test_reports_diff_and_untracked(self, monkeypatch):
+        monkeypatch.setattr(agents.git_helper, "_git_at",
+                            self._fake_git(diff="@@ -1 +1 @@\n-a\n+b", untracked="new_file.py"))
+        out = agents._synthesize_handoff(_fake_run())
+        assert "new_file.py" in out
+        assert "+b" in out
+        assert "git diff HEAD" in out
+
+    def test_no_changes_says_so(self, monkeypatch):
+        monkeypatch.setattr(agents.git_helper, "_git_at", self._fake_git())
+        out = agents._synthesize_handoff(_fake_run())
+        assert "no changes" in out.lower()
+
+
+class TestRunInstanceOverflow:
+    """The safety valve can fire on ANY send within an instance, not just the
+    first: a gate correction re-enters the same session and can tip it over the
+    ceiling. _run_instance must salvage that (return a None envelope) rather than
+    let the overflowed, unparseable turn hard-fail the phase."""
+
+    def _stub_run(self, tmp_path):
+        from unittest.mock import MagicMock
+        run = MagicMock()
+        run.adw_id = "abc12345"
+        run.repo_root = str(tmp_path)
+        run.context_handoff_dir = tmp_path
+        run.session_dir = tmp_path
+        return run
+
+    def _agent(self):
+        return AgentConfig(name="builder", coding_agent="pi", model="openai-codex/x",
+                           prompt_engineering=PromptEngineering(system="s.md", user="u.md"))
+
+    def test_overflow_on_gate_correction_send_is_salvaged(self, tmp_path, monkeypatch):
+        from adw_modules.data_types import AgentCall, GateReport, PiResult
+
+        # Render/persist/guidance are irrelevant to the control flow under test.
+        monkeypatch.setattr(agents.prompts, "render", lambda *a, **k: "")
+        monkeypatch.setattr(agents.prompts, "save", lambda *a, **k: None)
+        monkeypatch.setattr(agents, "project_guidance", lambda root: None)
+
+        # Two backend turns: (1) valid JSON that a gate will reject, forcing a
+        # correction send; (2) the correction turn gets valve-killed (overflowed).
+        turns = iter([
+            PiResult(text='{"status": "success", "changed_files": []}', overflowed=False),
+            PiResult(text="", overflowed=True, context_tokens=5000, context_window=272000),
+        ])
+        monkeypatch.setattr(agents.agent_pi, "run",
+                            lambda request, **kw: next(turns))
+
+        failing_gate = lambda envelope, run: GateReport().check("x", False, "nope")
+        call = AgentCall(output_type=BuildOutput, prompt="task", gates=[failing_gate])
+        phase = SimpleNamespace(phase_id="p", params=SimpleNamespace(retries=1), attempt=0)
+
+        envelope, result = agents._run_instance(
+            self._stub_run(tmp_path), phase, self._agent(), call, tmp_path,
+            "task", "sess-1", 0.8, 1, tree_before=object())
+
+        # Salvaged: None envelope + the overflowed result, so the chain continues
+        # instead of the phase hard-failing on an unparseable correction turn.
+        assert envelope is None
+        assert result.overflowed is True
 
 
 class TestExtractJson:

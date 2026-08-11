@@ -11,11 +11,14 @@ from pydantic import ValidationError
 
 from adw_modules.data_types import (
     BaseRef,
+    BuildOutput,
+    ContinuationConfig,
     GateReport,
     PhaseParams,
     QualityCheckConfig,
     SandboxConfig,
     SandboxProfile,
+    SSSFConfig,
     UsageBreakdown,
 )
 
@@ -104,6 +107,47 @@ class TestSandboxProfileFor:
         assert cfg.profile_for("local") is None
         assert cfg.profile_for(None) is None
         assert cfg.profile_for("container") is None
+
+
+class TestContinuationConfig:
+    def test_defaults_enable_bounded_chaining(self):
+        # A config with no `continuation:` block must read as enabled-with-bounds,
+        # so the engine default (chained builder on) holds without operator action.
+        c = SSSFConfig().continuation
+        assert c.enabled is True
+        assert c.occupancy_threshold == 0.8
+        assert c.max_instances == 3
+
+    def test_threshold_must_be_a_fraction(self):
+        for bad in (0.0, -0.1, 1.5):
+            with pytest.raises(ValidationError):
+                ContinuationConfig(occupancy_threshold=bad)
+        # the boundary 1.0 is allowed (kill only at a full window)
+        assert ContinuationConfig(occupancy_threshold=1.0).occupancy_threshold == 1.0
+
+    def test_max_instances_at_least_one(self):
+        with pytest.raises(ValidationError):
+            ContinuationConfig(max_instances=0)
+        assert ContinuationConfig(max_instances=1).max_instances == 1  # the "off" value
+
+
+class TestBuildOutputContinuation:
+    def test_defaults_to_complete_no_handoff(self):
+        # An ordinary one-shot build never opts into continuation.
+        b = BuildOutput(status="success")
+        assert b.continuation == "complete"
+        assert b.handoff == ""
+
+    def test_needs_continuation_is_still_a_success(self):
+        # A bounded unit that succeeded and asks to be continued is status=success.
+        b = BuildOutput(status="success", continuation="needs_continuation",
+                        handoff="did X, still need Y")
+        assert b.continuation == "needs_continuation"
+        assert b.status == "success"
+
+    def test_bad_continuation_value_rejected(self):
+        with pytest.raises(ValidationError):
+            BuildOutput(status="success", continuation="partial")
 
 
 class TestGateReport:
