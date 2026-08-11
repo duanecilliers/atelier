@@ -221,6 +221,19 @@ as context. `gates` is a list of deterministic acceptance-check callables from
 `adw_modules/gates.py` — see [03-agents-and-gates.md](03-agents-and-gates.md) for how gates
 and envelopes fit together.
 
+**The chained builder (context-window handoff).** When `output_type` is `BuildOutput`,
+`execute()` runs the build as a bounded *chain* of instances rather than one shot. If a builder
+cannot finish inside one context window - it cooperatively sets `continuation:
+"needs_continuation"` on its envelope and writes a `handoff` doc, **or** the safety valve
+hard-kills the run at `continuation.occupancy_threshold` of the model's context window and
+synthesizes a handoff from `git diff` - a **fresh instance of the same model** (a new session =
+an empty window) continues from that handoff, with the prior instance's edits already on disk.
+Bounded at `continuation.max_instances`, then the phase fails loudly. It is scoped to
+`BuildOutput` phases, so every build-bearing ADW inherits it with no changes; the write boundary
+is enforced once over the whole chain. The policy lives in the `continuation:` config block
+(`data_types.py::ContinuationConfig`), enabled by default. See
+[05-config-and-roster.md](05-config-and-roster.md) for the knobs.
+
 ### End-to-end example
 
 `engine/adws/adw_scout.py`, in full:

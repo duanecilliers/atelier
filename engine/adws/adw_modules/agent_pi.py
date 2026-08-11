@@ -246,6 +246,11 @@ def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
 
     result = PiResult(session_id=request.session_id,
                       context_window=context_window(provider, model_id))
+    # The chained-builder safety valve. Occupancy is a fraction of the window, so
+    # a ceiling is only computable when the window is known (0 = unknown -> no
+    # valve; the cooperative handoff path still works). See ContinuationConfig.
+    ceiling = (int(request.context_kill_threshold * result.context_window)
+               if request.context_kill_threshold and result.context_window else 0)
     # stdin is DEVNULL, deliberately. The prompt travels in argv, so the child
     # never needs stdin — but inheriting the parent's means pi sees a non-TTY
     # and can sit forever waiting for piped input that will never arrive or
@@ -258,6 +263,7 @@ def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
                                env=operator_env())
     if on_spawn:
         on_spawn(process.pid)
+    valve_fired = False
     with raw_path.open("a") as raw:
         assert process.stdout is not None
         for line in process.stdout:
@@ -285,14 +291,47 @@ def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
                     # you can't trust, so it must not overwrite a good reading.
                     if turn and message.get("stopReason") not in ("aborted", "error"):
                         result.context_tokens = turn
+                    # A single-send hard overflow surfaces as an aborted/errored
+                    # turn - flag it so the engine can salvage via a synthesized
+                    # handoff instead of failing the phase outright.
+                    if message.get("stopReason") in ("aborted", "error"):
+                        result.overflowed = True
                     result.cost += (usage.get("cost", {}) or {}).get("total", 0.0) or 0.0
             if on_event:
                 on_event(event)
+            # Safety valve: the agentic loop owns its turn boundaries, so the only
+            # clean interrupt is a blunt one - terminate the subprocess the moment
+            # occupancy crosses the ceiling. Per-file edits are atomic, so the work
+            # already written to disk survives; the engine reads overflowed and
+            # continues from a synthesized handoff.
+            if ceiling and result.context_tokens >= ceiling:
+                valve_fired = True
+                result.overflowed = True
+                process.terminate()
+                break
 
-    stderr = process.stderr.read() if process.stderr else ""
-    result.returncode = process.wait()
+    if valve_fired:
+        # Bounded teardown FIRST, and DON'T read the child's stderr. We stopped
+        # reading stdout at the break, so a child slow to die on SIGTERM could be
+        # blocked on a full stdout pipe; an unbounded process.stderr.read() would
+        # then deadlock waiting for an EOF that never comes. SIGTERM, then SIGKILL if
+        # it lingers past the timeout, guarantees the child dies. The valve path is
+        # overflowed=True, so stderr is never needed (the raise below is suppressed).
+        try:
+            result.returncode = process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            result.returncode = process.wait()
+        stderr = ""
+    else:
+        # Normal exit: stdout hit EOF so the child is finished or finishing; reading
+        # its stderr cannot deadlock.
+        stderr = process.stderr.read() if process.stderr else ""
+        result.returncode = process.wait()
     if on_exit:
         on_exit(process.pid)
-    if result.returncode != 0 and not result.text:
+    # A valve kill leaves a non-zero (signal) return code by design - that is not a
+    # failure, it is the salvage path, so it must not raise. A genuine crash still does.
+    if result.returncode != 0 and not result.text and not result.overflowed:
         raise RuntimeError(f"pi exited {result.returncode}: {stderr.strip()[-800:]}")
     return result

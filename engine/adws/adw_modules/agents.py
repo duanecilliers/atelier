@@ -15,17 +15,26 @@ from typing import Optional
 
 import yaml
 
-from . import agent_cc, agent_pi, permissions, prompts
-from .data_types import (AgentCall, AgentConfig, EnvelopeBase, EventRecord,
-                         GateCheck, GateReport, Phase, PiRequest, SSSFConfig,
-                         UsageBreakdown)
+from . import agent_cc, agent_pi, git_helper, permissions, prompts
+from .data_types import (AgentCall, AgentConfig, BuildOutput, EnvelopeBase,
+                         EventRecord, GateCheck, GateReport, Phase, PiRequest,
+                         SSSFConfig, UsageBreakdown)
 from .utils import new_id, resolve_trace_path
 
 JSON_FIX_ATTEMPTS = 2      # continue-with-correction attempts for malformed JSON
+_SYNTH_DIFF_CHARS = 12_000  # cap on the git-diff backstop handoff (agents.execute)
 
 
 class GateFailure(RuntimeError):
     pass
+
+
+class _ContextOverflow(Exception):
+    """Raised inside an instance the moment the safety valve hard-kills a send -
+    on the first send OR any JSON-fix/gate-correction send. Caught in
+    _run_instance, which hands the caller a None envelope so the chain synthesizes
+    a handoff and continues with a fresh instance. Only raised when chaining is
+    active; a non-chaining overflow falls through to the normal parse."""
 
 
 # ── config ───────────────────────────────────────────────────────────────────
@@ -125,13 +134,162 @@ def validate(cfg: SSSFConfig, required: list[str]) -> None:
 # ── execution ────────────────────────────────────────────────────────────────
 
 def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
-    """One agent call: render prompts -> pi run -> typed parse -> gates -> envelope."""
+    """One agent phase: render prompts -> run -> typed parse -> gates -> envelope.
+
+    For BuildOutput phases this drives the CHAINED BUILDER (the context-window
+    handoff). If a builder cannot finish inside one context window - it either
+    cooperatively asks to continue (status success + continuation=needs_continuation
+    + a handoff doc), or the safety valve hard-kills it at the occupancy threshold -
+    a FRESH instance of the SAME model continues from a handoff, with the prior
+    instance's edits already applied on disk. Bounded by continuation.max_instances,
+    then the phase fails loudly. Every other agent phase runs exactly one instance,
+    byte-for-byte as before. ADWs need no changes: the whole feature hangs off the
+    call's output_type being BuildOutput.
+    """
     agent = resolve(run.cfg, phase.params.owner)
     agent_dir = run.session_dir / agent.name
     agent_dir.mkdir(parents=True, exist_ok=True)
 
+    # The write boundary measures cumulative writes against the tree as it was
+    # before the phase opened, so snapshot ONCE here. Enforcement runs inside each
+    # completing instance (before it persists a valid envelope or saves its session),
+    # exactly as it did pre-refactor: an agent must not record success on a phase in
+    # which it wrote out of bounds. Passing the phase baseline down keeps the check
+    # cumulative across a chain while restoring the enforce-before-accept ordering.
+    tree_before = permissions.snapshot(run)
+
+    cont = run.cfg.continuation
+    is_build = isinstance(call.output_type, type) and issubclass(call.output_type, BuildOutput)
+    # Chaining (and its valve) only make sense when a NEXT instance can continue -
+    # so enabled, a build phase, and a cap of at least 2. `max_instances: 1` is the
+    # documented "off" switch and behaves exactly like the pre-continuation engine.
+    chaining = cont.enabled and is_build and cont.max_instances >= 2
+
+    if chaining:
+        def run_instance(prompt_text: str, instance: int):
+            session_id = _instance_session_id(run, agent, instance)
+            return _run_instance(run, phase, agent, call, agent_dir, prompt_text,
+                                 session_id, cont.occupancy_threshold, instance, tree_before)
+        envelope = _chain(run, phase, cont, call.prompt, run_instance,
+                          lambda: _synthesize_handoff(run))
+    else:
+        envelope, _ = _run_instance(run, phase, agent, call, agent_dir, call.prompt,
+                                    _agent_session_id(run, agent), None, 1, tree_before)
+
+    if envelope.status != "success":
+        raise RuntimeError(f"{agent.name} reported status={envelope.status!r}: {envelope.summary}")
+    return envelope
+
+
+# ── the chained builder (context-window handoff) ─────────────────────────────
+
+_CONTINUATION_NOTE = (
+    "Your predecessor's changes are ALREADY APPLIED in this worktree. Run "
+    "`git diff` and `git status` to see exactly what is on disk, then CONTINUE "
+    "from there - do not restart, and do not redo work that is already done.")
+
+
+def _continuation_seed(original_task: str, handoff: str) -> str:
+    """The prompt a fresh continuation instance receives: the original task, the
+    predecessor's handoff (agent-authored or diff-synthesized), and the standing
+    note that the prior work is already on disk."""
+    return (f"{original_task}\n\n"
+            f"## Continuation handoff from the previous builder instance\n\n"
+            f"{handoff}\n\n"
+            f"## How to continue\n\n{_CONTINUATION_NOTE}")
+
+
+def _synthesize_handoff(run) -> str:
+    """The backstop handoff when no agent-authored one exists (the safety-valve
+    hard-kill, or a builder that errored out): git diff IS the record of what
+    changed. Anchored at run.repo_root - the EXECUTION root where the builder wrote
+    code (the worktree under a sandbox), not the process cwd - the same tree the
+    continuation instance will itself inspect."""
+    root = run.repo_root
+    parts = [
+        "(No agent-authored handoff - the previous instance was interrupted at the "
+        "context-window safety valve, or exited without one. This handoff is "
+        "synthesized from git; read the working tree to see the real state.)",
+    ]
+    try:
+        diff = git_helper._git_at(root, "diff", "HEAD")
+    except Exception:
+        diff = ""
+    try:
+        untracked = [ln for ln in git_helper._git_at(
+            root, "ls-files", "--others", "--exclude-standard").splitlines() if ln]
+    except Exception:
+        untracked = []
+    if untracked:
+        parts.append("### New (untracked) files\n\n" + "\n".join(f"- {p}" for p in untracked))
+    if diff:
+        clipped = (diff if len(diff) <= _SYNTH_DIFF_CHARS
+                   else diff[:_SYNTH_DIFF_CHARS] + "\n… (diff truncated)")
+        parts.append("### Uncommitted changes so far (`git diff HEAD`)\n\n```diff\n"
+                     + clipped + "\n```")
+    if not diff and not untracked:
+        parts.append("git shows no changes yet - begin the task from scratch.")
+    return "\n\n".join(parts)
+
+
+def _instance_session_id(run, agent: AgentConfig, instance: int) -> str:
+    """Instance 1 reuses the agent's cross-phase session (rejoin context - e.g. a
+    revise phase continuing its build); every later instance in a chain gets a
+    FRESH id, because a new session is an empty window, which is the whole point."""
+    if instance == 1:
+        return _agent_session_id(run, agent)
+    return f"sssf-{run.adw_id}-{agent.name}-{new_id(4)}"
+
+
+def _chain(run, phase: Phase, cont, original_task: str, run_instance, synth_handoff) -> EnvelopeBase:
+    """Drive up to cont.max_instances builder instances, chaining a fresh one each
+    time the last cannot finish inside its window. `run_instance(prompt, n)` returns
+    (envelope, result); a valve-killed instance returns (None, result) with
+    result.overflowed set. Returns the final envelope; raises loudly at the cap."""
+    max_n = max(1, cont.max_instances)
+    prompt_text = original_task
+    envelope: EnvelopeBase | None = None
+    for instance in range(1, max_n + 1):
+        envelope, result = run_instance(prompt_text, instance)
+        overflow = bool(getattr(result, "overflowed", False))
+        cooperative = (envelope is not None
+                       and getattr(envelope, "continuation", "complete") == "needs_continuation")
+        # A real, complete (or failed) envelope that is not asking to continue is
+        # the end of the chain - execute() then rules on its status.
+        if envelope is not None and not overflow and not cooperative:
+            return envelope
+        source = "cooperative" if cooperative else "context-valve"
+        if instance >= max_n:
+            raise RuntimeError(
+                f"builder still needs to continue after {max_n} instance(s) "
+                f"({source} handoff) - failing loudly rather than chaining "
+                f"unbounded. Split the task or raise continuation.max_instances.")
+        authored = bool(cooperative and envelope is not None and envelope.handoff.strip())
+        handoff = envelope.handoff.strip() if authored else synth_handoff()
+        prompt_text = _continuation_seed(original_task, handoff)
+        run.console.note(f"builder instance {instance} did not finish ({source}); "
+                         f"continuing with a fresh instance {instance + 1}")
+        run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,
+                                     type="log", name="continuation",
+                                     payload={"from_instance": instance,
+                                              "to_instance": instance + 1,
+                                              "source": source,
+                                              "handoff_synthesized": not authored,
+                                              "handoff_chars": len(handoff)}))
+    return envelope  # unreachable: the loop returns or raises
+
+
+def _run_instance(run, phase: Phase, agent: AgentConfig, call: AgentCall,
+                  agent_dir, prompt_text: str, session_id: str,
+                  context_threshold: Optional[float], instance: int, tree_before):
+    """One agent instance: render prompts -> run -> typed parse -> gates. Returns
+    (envelope, latest_result). A valve-killed instance was terminated mid-work and
+    has no cooperative Report JSON to parse (and no live session to re-prompt), so
+    it returns (None, result) with result.overflowed set - the caller synthesizes a
+    handoff and continues with a fresh instance. `tree_before` is the phase's write
+    baseline; enforcement runs here, before this instance records success."""
     variables = {
-        "prompt": call.prompt,
+        "prompt": prompt_text,
         "previous_envelope": call.previous.model_dump_json(indent=2) if call.previous else "(none)",
         "context_handoff_dir": str(run.context_handoff_dir),
         # Two roots, deliberately distinct. `context_handoff_dir` anchors at the
@@ -150,18 +308,17 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
     # real repo's adws/adw_data tree, exactly where the trace sink is.
     system_text = prompts.render(resolve_trace_path(agent.prompt_engineering.system), variables)
     user_text = prompts.render(resolve_trace_path(agent.prompt_engineering.user), variables)
-    # claude_code runs in SDK isolation mode (no ambient CLAUDE.md), so hand it the
-    # stamped repo's guidance explicitly. pi already discovers AGENTS.md/CLAUDE.md
-    # from cwd, so its agents get it without injection. Appended (not prepended):
-    # the agent's own system.md leads, the project's conventions follow as context.
-    if agent.coding_agent == "claude_code":
-        guidance = project_guidance(run.repo_root)
-        if guidance:
-            system_text = f"{system_text}\n\n{guidance}"
+    # Hand the stamped repo's guidance (AGENTS.md, else CLAUDE.md) to EVERY backend.
+    # claude_code runs in SDK isolation (no ambient CLAUDE.md); pi discovers these
+    # from cwd natively, but that native discovery is NOT guaranteed under a sandbox
+    # worktree, so inject unconditionally rather than trust it. Appended (not
+    # prepended): the agent's own system.md leads, the project's conventions follow.
+    guidance = project_guidance(run.repo_root)
+    if guidance:
+        system_text = f"{system_text}\n\n{guidance}"
     prompts.save(agent_dir / "prompts", "system.md", system_text)
     prompts.save(agent_dir / "prompts", "user.md", user_text)
 
-    session_id = _agent_session_id(run, agent)
     run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,
                                  type="agent_start", name=agent.name,
                                  payload={"model": agent.model, "thinking": agent.thinking,
@@ -170,19 +327,20 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
                                           "coding_agent": agent.coding_agent,
                                           "purpose": agent.purpose,
                                           "tools": agent.tools,  # None = all tools
-                                          "harness_engineering": agent.harness_engineering}))
+                                          "harness_engineering": agent.harness_engineering,
+                                          "instance": instance}))
     run.console.agent_started(agent.name, agent.model, session_id)
 
-    # Parse retries and gate corrections re-enter the SAME pi session, so the
-    # last send is the one whose context occupancy is current — while spend is
-    # the opposite: every send costs, so usage accumulates across all of them.
+    # Parse retries and gate corrections re-enter the SAME session, so the last send
+    # is the one whose context occupancy is current - while spend is the opposite:
+    # every send costs, so usage accumulates across all of them within this instance.
     latest: agent_pi.PiResult | None = None
     spent = UsageBreakdown()
 
-    def send(prompt_text: str) -> agent_pi.PiResult:
+    def send(text: str) -> agent_pi.PiResult:
         nonlocal latest
         request = PiRequest(
-            prompt=prompt_text,
+            prompt=text,
             system_prompt=system_text,
             model=agent.model,
             thinking=agent.thinking,
@@ -193,6 +351,7 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
             tools=agent.tools,
             extensions=agent.harness_engineering,
             cwd=str(run.repo_root),
+            context_kill_threshold=context_threshold,
         )
         # Agent proposes, code disposes — through whichever backend the config
         # names. Both expose the same run() contract and return the same PiResult;
@@ -209,47 +368,59 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
         run.add_usage(result.tokens, result.cost)
         spent.merge(result.usage)
         latest = result
+        # A valve kill can land on ANY send - the first, or a later JSON-fix / gate
+        # correction whose cumulative occupancy tips the same session over the
+        # ceiling. Signal it uniformly so it is salvaged wherever it happens, instead
+        # of only the first send. Guarded on chaining being active: a non-chaining
+        # (context_threshold is None) aborted/errored turn falls through to the
+        # normal parse, which raises cleanly as before. Usage is already recorded.
+        if result.overflowed and context_threshold is not None:
+            raise _ContextOverflow()
         return result
 
-    # What the tree looked like before this agent got its hands on it. Every
-    # send in this phase — first prompt, JSON retries, gate corrections — is
-    # measured against this one baseline.
-    tree_before = permissions.snapshot(run)
-
-    result = send(user_text)
-    envelope, attempt = _parse_with_retries(run, phase, call, result, send)
-
-    # claim gates — violations flow back into the SAME session as corrections
-    for gate_attempt in range(1, max(1, phase.params.retries + 1) + 1):
-        violations = []
-        for gate in call.gates:
-            report = _as_report(gate(envelope, run))
-            found = report.violations
-            run.tracer.gate_row(phase, gate.__name__, report, gate_attempt)
-            run.tracer.event(EventRecord(
-                adw_id=run.adw_id, phase_id=phase.phase_id,
-                type="gate_fail" if found else "gate_pass", name=gate.__name__,
-                payload={"attempt": gate_attempt, "violations": found,
-                         "checks": [c.model_dump() for c in report.checks]}))
-            run.console.gate_result(gate.__name__, report)
-            violations.extend(found)
-        if not violations:
-            break
-        if gate_attempt > phase.params.retries:
-            raise GateFailure(f"{agent.name} failed gates after {gate_attempt} attempt(s):\n- "
-                              + "\n- ".join(violations))
-        phase.attempt = gate_attempt
-        run.console.retry(agent.name, gate_attempt, phase.params.retries,
-                          f"{len(violations)} gate violation(s)")
-        correction = ("Your previous response failed validation:\n- "
-                      + "\n- ".join(violations)
-                      + "\n\nFix these problems, then re-emit ONLY your Report JSON.")
-        result = send(correction)
+    # A valve-killed instance was terminated mid-work: no cooperative Report JSON,
+    # no live session to re-prompt. Record it and hand the caller a None envelope so
+    # it can synthesize a handoff and chain a fresh instance.
+    try:
+        result = send(user_text)
         envelope, attempt = _parse_with_retries(run, phase, call, result, send)
 
-    # Permission is checked after every send is done, and before the envelope is
-    # accepted: an agent does not get to report success on a phase in which it
-    # wrote somewhere it was not allowed to.
+        # claim gates - violations flow back into the SAME session as corrections
+        for gate_attempt in range(1, max(1, phase.params.retries + 1) + 1):
+            violations = []
+            for gate in call.gates:
+                report = _as_report(gate(envelope, run))
+                found = report.violations
+                run.tracer.gate_row(phase, gate.__name__, report, gate_attempt)
+                run.tracer.event(EventRecord(
+                    adw_id=run.adw_id, phase_id=phase.phase_id,
+                    type="gate_fail" if found else "gate_pass", name=gate.__name__,
+                    payload={"attempt": gate_attempt, "violations": found,
+                             "checks": [c.model_dump() for c in report.checks]}))
+                run.console.gate_result(gate.__name__, report)
+                violations.extend(found)
+            if not violations:
+                break
+            if gate_attempt > phase.params.retries:
+                raise GateFailure(f"{agent.name} failed gates after {gate_attempt} attempt(s):\n- "
+                                  + "\n- ".join(violations))
+            phase.attempt = gate_attempt
+            run.console.retry(agent.name, gate_attempt, phase.params.retries,
+                              f"{len(violations)} gate violation(s)")
+            correction = ("Your previous response failed validation:\n- "
+                          + "\n- ".join(violations)
+                          + "\n\nFix these problems, then re-emit ONLY your Report JSON.")
+            result = send(correction)
+            envelope, attempt = _parse_with_retries(run, phase, call, result, send)
+    except _ContextOverflow:
+        _emit_agent_end(run, phase, agent, session_id, spent, latest, instance,
+                        overflowed=True)
+        return None, latest
+
+    # Permission is enforced BEFORE this instance records success: an agent does not
+    # get to persist a valid envelope or save a reusable session for a phase in which
+    # it (or any earlier instance in the chain) wrote out of bounds. Cumulative vs
+    # the phase baseline, so a breach in any instance rolls back and fails here.
     try:
         touched = permissions.enforce(run, phase, agent, tree_before)
     except permissions.PermissionBreach as breach:
@@ -267,28 +438,34 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
     _persist_envelope(run, phase, agent.name, call, envelope, attempt, valid=True)
     run.console.envelope_summary(envelope)
     context = latest or result
-    run.tracer.agent_session_row(run.adw_id, agent, session_id,
-                                 context_tokens=context.context_tokens,
-                                 context_window=context.context_window)
     run.save_agent_map(agent.name, {"session_id": session_id, "model": agent.model,
                                     "coding_agent": agent.coding_agent})
     run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,
                                  type="handoff", name=agent.name,
                                  payload={"artifacts": envelope.artifacts,
                                           "summary": envelope.summary}))
+    _emit_agent_end(run, phase, agent, session_id, spent, context, instance)
+    return envelope, latest
+
+
+def _emit_agent_end(run, phase: Phase, agent: AgentConfig, session_id: str,
+                    spent: UsageBreakdown, context, instance: int,
+                    overflowed: bool = False) -> None:
+    """Close one instance: its session-occupancy row, the agent_end event (usage is
+    this INSTANCE's spend, never cumulative across the chain - the sum over
+    instances is the phase total), and the console line."""
+    run.tracer.agent_session_row(run.adw_id, agent, session_id,
+                                 context_tokens=context.context_tokens,
+                                 context_window=context.context_window)
+    payload = {"cost": spent.total_cost, "usage": spent.model_dump(),
+               "context_tokens": context.context_tokens,
+               "context_window": context.context_window, "instance": instance}
+    if overflowed:
+        payload["overflowed"] = True
     run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,
                                  type="agent_end", name=agent.name,
-                                 # Phase totals, not the last send's: a retried
-                                 # phase paid for every attempt.
-                                 tokens=spent.total_tokens,
-                                 payload={"cost": spent.total_cost,
-                                          "usage": spent.model_dump(),
-                                          "context_tokens": context.context_tokens,
-                                          "context_window": context.context_window}))
+                                 tokens=spent.total_tokens, payload=payload))
     run.console.agent_finished(agent.name, spent.total_tokens, spent.total_cost)
-    if envelope.status != "success":
-        raise RuntimeError(f"{agent.name} reported status={envelope.status!r}: {envelope.summary}")
-    return envelope
 
 
 # ── internals ────────────────────────────────────────────────────────────────

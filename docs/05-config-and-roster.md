@@ -35,6 +35,23 @@ repo, so every path in the file is `engine/`-prefixed and ADWs run from the repo
 | `db` | `engine/adws/adw_data/sssf.db` | Where the tracer writes directly; the cockpit polls it |
 | `poll_ms` | `500` | Visualizer live-poll cadence |
 
+### `continuation:` - the chained builder (context-window handoff)
+
+When a builder fills its model's context window on a large task, it does **not** restart: it hands
+off and a **fresh instance of the same model** continues, with the prior work already on disk.
+Cooperatively (the builder sets `continuation: "needs_continuation"` + writes a `handoff`) or via
+the **safety valve** (the engine hard-kills the run at `occupancy_threshold` of the window and
+synthesizes a handoff from `git diff`). Bounded at `max_instances`, then the phase fails loudly.
+Scoped to `BuildOutput` phases, so every build-bearing ADW inherits it with no changes. Enabled by
+default; `max_instances: 1` turns it off. Runtime detail in
+[02-engine-runtime.md](02-engine-runtime.md).
+
+| Key | Live value | What it does |
+|---|---|---|
+| `enabled` | `true` | Master switch; `false` = one instance, no valve |
+| `occupancy_threshold` | `0.8` | Fraction of the context window at which the valve hard-kills the run (only when the window is known) |
+| `max_instances` | `3` | Total builder instances before the phase fails loudly; `1` = off |
+
 ### `agents:` — the live roster, 5 agents
 
 | Agent | `coding_agent` | `model` | `writes` | Purpose |
@@ -154,12 +171,24 @@ One entry in the `quality:` map (the map key is the check's name).
 
 `to_spec(name)` adapts one entry into the `QualityCheckSpec` that `quality._run()` executes.
 
+### `ContinuationConfig`
+
+The chained-builder policy (see the `continuation:` block above). Validated: `occupancy_threshold`
+in `(0, 1]`, `max_instances >= 1`.
+
+| Field | Type | Default |
+|---|---|---|
+| `enabled` | `bool` | `True` |
+| `occupancy_threshold` | `float` | `0.8` (fraction of the context window; the valve's kill point) |
+| `max_instances` | `int` | `3` (`1` = off) |
+
 ### `SSSFConfig` — the root model
 
 | Field | Type | Default |
 |---|---|---|
 | `defaults` | `ConfigDefaults` | `ConfigDefaults()` |
 | `observability` | `ObservabilityConfig` | `ObservabilityConfig()` |
+| `continuation` | `ContinuationConfig` | `ContinuationConfig()` (chained builder, enabled) |
 | `quality` | `dict[str, QualityCheckConfig]` | `{}` (empty = no checks run) |
 | `agents` | `list[AgentConfig]` | `[]` |
 
@@ -285,7 +314,7 @@ inside the determinism spine: writing it spawns no process and mutates no run's 
 Pydantic at run time regardless of what the cockpit wrote.
 
 - `RosterConfigSchema` (Zod) mirrors `SSSFConfig`/`ConfigDefaults`/
-  `ObservabilityConfig`/`AgentConfig`/`QualityCheckConfig` field-for-field, plus two extra checks
+  `ObservabilityConfig`/`ContinuationConfig`/`AgentConfig`/`QualityCheckConfig` field-for-field, plus two extra checks
   the Pydantic side doesn't enforce: a `model` must look like `provider/id`, and `color`
   must be 3/6-digit hex or empty. `coding_agent`/`thinking` are constrained to enums
   from `roster-constants.ts` rather than bare strings. This mirror is kept in lockstep **by hand**

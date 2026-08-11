@@ -99,6 +99,16 @@ class BuildOutput(EnvelopeBase):
     # newlines, so a landed sandbox PR gets its title from the subject and its
     # description from the body (`gh pr create --fill`). A bare subject -> no PR body.
     commit_message: str = ""
+    # The chained-builder (context-window handoff) signal. A builder that cannot
+    # finish a large task inside one context window stops at a CLEAN point, sets
+    # continuation="needs_continuation", and writes `handoff` - a fresh instance of
+    # the SAME model then continues from it (the prior instance's edits are already
+    # on disk). Default "complete": an ordinary one-shot build never opts in, and
+    # `status` stays success/fail either way (a bounded unit that succeeded and asks
+    # to be continued is still a success). Both fields are consumed by the engine's
+    # continuation loop (agents.execute); no ADW reads them directly.
+    continuation: Literal["complete", "needs_continuation"] = "complete"
+    handoff: str = ""               # the handoff doc when continuation == needs_continuation
 
 
 class ScoutFinding(BaseModel):
@@ -462,9 +472,52 @@ class SandboxConfig(BaseModel):
         return None
 
 
+class ContinuationConfig(BaseModel):
+    """The chained-builder (context-window handoff) policy - see agents.execute().
+
+    When a builder fills its model's context window on a large task, it does NOT
+    restart: it stops at a clean point, hands off, and a fresh instance of the
+    SAME model continues (the code persists on disk between instances). Two paths
+    reach a handoff - the agent-cooperative one (the builder emits
+    continuation="needs_continuation" + a handoff doc), and the safety valve
+    (the engine hard-kills a run at `occupancy_threshold` of the model's context
+    window and synthesizes a handoff from `git diff`). Bounded at `max_instances`,
+    then the phase fails loudly. Scoped to BuildOutput phases only. Enabled by
+    default with sane bounds; a stamped repo tunes it here without editing managed
+    code, exactly like `quality:`/`sandbox:`.
+    """
+
+    enabled: bool = True
+    # Fraction of the model's context window at which the safety valve hard-kills a
+    # runaway build (the cooperative path is unbounded by this). The valve only
+    # engages when the model's context window is known (see agent_pi.context_window;
+    # 0 = unknown -> no valve, cooperative path still works).
+    occupancy_threshold: float = 0.8
+    max_instances: int = 3          # then fail loudly rather than chain forever
+
+    @field_validator("occupancy_threshold")
+    @classmethod
+    def _threshold_in_range(cls, value: float) -> float:
+        if not 0.0 < value <= 1.0:
+            raise ValueError("continuation.occupancy_threshold must be in (0, 1] "
+                             "- it is a fraction of the context window, e.g. 0.8")
+        return value
+
+    @field_validator("max_instances")
+    @classmethod
+    def _at_least_one(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("continuation.max_instances must be >= 1 "
+                             "(1 = no chaining; the default 3 allows two continuations)")
+        return value
+
+
 class SSSFConfig(BaseModel):
     defaults: ConfigDefaults = Field(default_factory=ConfigDefaults)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    # The chained-builder policy. Default (no `continuation:` block) = enabled with
+    # a 0.8 occupancy valve and a 3-instance cap, applied to every BuildOutput phase.
+    continuation: ContinuationConfig = Field(default_factory=ContinuationConfig)
     # The deterministic quality commands (test/lint/typecheck/…), keyed by name.
     # Empty by default: a stamped repo declares its own here rather than editing
     # managed code. See adw_modules/quality.py, which builds its block list from
@@ -510,6 +563,12 @@ class PiRequest(BaseModel):
     tools: Optional[list[str]] = None
     extensions: list[str] = Field(default_factory=list)
     cwd: str = "."                  # set from run.repo_root — the codebase root agents work in
+    # The chained-builder safety valve (agents.execute, build phases only). When
+    # set, the backend hard-kills this run once window occupancy crosses this
+    # FRACTION of the model's context window, returning a partial PiResult with
+    # overflowed=True so the engine can synthesize a handoff and continue. None
+    # (every non-build call) = no valve, exactly as before.
+    context_kill_threshold: Optional[float] = None
 
 
 class UsageBreakdown(BaseModel):
@@ -572,3 +631,8 @@ class PiResult(BaseModel):
     # visualizer's context bar measures against `context_window`.
     context_tokens: int = 0
     context_window: int = 0         # 0 when the registry declares no ceiling
+    # True when the chained-builder safety valve terminated this run (occupancy
+    # crossed context_kill_threshold), or a single-send hard overflow was detected
+    # (aborted/error stop reason). The engine reads this to decide whether to
+    # synthesize a handoff and continue with a fresh instance.
+    overflowed: bool = False

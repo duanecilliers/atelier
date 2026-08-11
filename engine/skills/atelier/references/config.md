@@ -19,6 +19,11 @@ observability:
   db: adws/adw_data/sssf.db
   poll_ms: 500
 
+continuation:                    # the chained builder (context-window handoff)
+  enabled: true
+  occupancy_threshold: 0.8       # hard-kill a runaway build at 80% of the window
+  max_instances: 3               # 1 build + up to 2 continuations, then fail loudly
+
 agents:
   - name: planner
     coding_agent: claude_code
@@ -223,6 +228,40 @@ Rule: **every entry in `harness_engineering` that registers a tool must have tha
 `harness_engineering` is a `pi`-backend mechanism: entries are pi extension **file paths**, passed through as `pi -e <path>`, one flag per entry, scoped to that agent only. This is where per-agent harness changes live — e.g. an output-tightening extension for a pi agent that keeps wrapping its envelope in prose. The starter roster ships with none, and `claude_code` agents need none — leave the field empty for them.
 
 **If the extension registers a tool, name that tool in the agent's `tools` list too** — `--tools` filters extension tools exactly like builtins, so an unnamed extension tool is silently unavailable no matter that the extension loaded fine. See [Extension tools must be named explicitly](#extension-tools-must-be-named-explicitly-pi-only) above. Extensions that only shape output or add flags (no tool registration) need no `tools` change.
+
+## Continuation (the chained builder)
+
+The optional `continuation:` block sets the **context-window handoff** policy. When a builder
+fills its model's context window on a large task it does **not** restart: it hands off and a
+**fresh instance of the same model** continues, with the prior instance's edits already on disk.
+Two paths reach a handoff:
+
+- **Cooperative** - the builder stops at a clean point, sets `continuation: "needs_continuation"`
+  in its `BuildOutput`, and writes a `handoff` doc (what changed, what remains, how to continue,
+  gotchas). This is where a *good* handoff comes from; the builder prompt teaches it.
+- **Safety valve** - the engine hard-kills the run when window occupancy crosses
+  `occupancy_threshold` (a fraction of the model's context window), then synthesizes a handoff from
+  `git diff`. Salvage-only, and it only engages when the model's context window is known.
+
+Bounded at `max_instances`, then the phase **fails loudly** rather than chaining forever. It is
+**scoped to build phases** - any agent call whose `output_type` is `BuildOutput`, which every
+build-bearing ADW uses - so all of them inherit it with no ADW changes. Defaults (shown below)
+enable it; `max_instances: 1` turns it off (a single instance, no valve, exactly as before). The
+model is the **same throughout** - this is unbounded context for one build, not a fallback to a
+bigger model.
+
+```yaml
+continuation:
+  enabled: true
+  occupancy_threshold: 0.8       # hard-kill a runaway build at 80% of the model's context window
+  max_instances: 3               # 1 build + up to 2 continuations, then fail loudly
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `enabled` | bool (`true`) | master switch; `false` = one instance, no valve |
+| `occupancy_threshold` | float in (0, 1] (`0.8`) | fraction of the context window at which the valve hard-kills the run |
+| `max_instances` | int >= 1 (`3`) | total builder instances before the phase fails loudly; `1` = off |
 
 ## Sandbox
 
