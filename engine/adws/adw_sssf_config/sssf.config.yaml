@@ -41,6 +41,18 @@ observability:
   db: engine/adws/adw_data/sssf.db        # tracer writes here directly; the UI polls it
   poll_ms: 500                     # visualizer live-poll cadence
 
+# The chained builder - a build that fills the model's context window does NOT
+# restart. It hands off (the builder cooperatively emits continuation +
+# a handoff doc, OR the engine hard-kills the run at occupancy_threshold and
+# synthesizes one from git diff) and a FRESH instance of the SAME model continues,
+# with the prior work already on disk. Bounded at max_instances, then the phase
+# fails loudly. Scoped to build phases (any BuildOutput agent call). Defaults shown;
+# max_instances: 1 turns it off (single instance, no valve, exactly as before).
+continuation:
+  enabled: true
+  occupancy_threshold: 0.8         # hard-kill the run at 80% of the model's context window
+  max_instances: 3                 # 1 build + up to 2 continuations, then fail loudly
+
 # Deterministic quality commands, keyed by name — the block list adw_modules/
 # quality.py runs (map order is run order). These are DATA: the invocation is
 # the only per-repo thing about a check, so it lives here (config the operator

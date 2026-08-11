@@ -150,11 +150,18 @@ async def _run_async(request: PiRequest, on_event: Optional[Callable[[dict], Non
     options = ClaudeAgentOptions(**{k: v for k, v in kwargs.items() if k in valid})
 
     result = PiResult(session_id=request.session_id)
+    # Known up front so the safety valve has a ceiling to measure occupancy against
+    # (0 = unknown -> no valve; the cooperative handoff path still works). Mirrors
+    # agent_pi.run. See ContinuationConfig.
+    result.context_window = agent_pi.context_window("anthropic", model_id)
+    ceiling = (int(request.context_kill_threshold * result.context_window)
+               if request.context_kill_threshold and result.context_window else 0)
     raw_path = Path(request.raw_output_path)
     raw_path.parent.mkdir(parents=True, exist_ok=True)
 
     text_parts: list[str] = []
     last_usage: dict = {}
+    valve_fired = False
     raw = raw_path.open("a")
     if dropped:
         raw.write(json.dumps({"type": "note", "dropped_options": dropped}) + "\n")
@@ -172,6 +179,24 @@ async def _run_async(request: PiRequest, on_event: Optional[Callable[[dict], Non
                 usage = getattr(message, "usage", None)
                 if usage:
                     last_usage = usage
+                    # Safety valve: the SDK owns the agentic loop's turn boundaries,
+                    # so the only clean interrupt is to stop consuming it once
+                    # occupancy crosses the ceiling. Breaking closes the query
+                    # generator (the SDK tears down its claude subprocess); edits
+                    # already written to disk survive. The engine reads overflowed
+                    # and continues from a synthesized handoff.
+                    #
+                    # NB: this depends on the SDK attaching per-turn usage to each
+                    # AssistantMessage (the same assumption `last_usage` already relies
+                    # on for the ResultMessage fallback). If a future SDK reports usage
+                    # ONLY on the terminal ResultMessage, `usage` here is None every
+                    # turn, this check never runs, and the valve is silently inactive
+                    # for claude_code - the cooperative handoff path (the builder
+                    # emitting needs_continuation) remains the primary safety for CC,
+                    # and the pi backend keeps its own valve either way.
+                    if ceiling and _context_tokens(usage) >= ceiling:
+                        valve_fired = True
+                        break
 
             elif cls == "UserMessage":
                 for block in getattr(message, "content", None) or []:
@@ -193,9 +218,24 @@ async def _run_async(request: PiRequest, on_event: Optional[Callable[[dict], Non
     finally:
         raw.close()
 
+    # The valve breaks before the ResultMessage, so fold in the last turn's usage by
+    # hand - the partial work still needs its occupancy and token counts recorded.
+    # Cost is the exception: the SDK reports dollars ONLY on the ResultMessage
+    # (total_cost_usd), which the break skips, so a valve-killed CC instance records
+    # its exact tokens with cost 0. The tokens are what bound the chain; the missing
+    # cents are a known, minor undercount for hard-killed Anthropic instances only.
+    if valve_fired:
+        result.overflowed = True
+        result.returncode = 1
+        if last_usage:
+            result.usage = _usage_breakdown(last_usage, result.cost)
+            result.tokens = result.usage.total_tokens
+            result.context_tokens = _context_tokens(last_usage)
+
     result.text = "".join(text_parts)
-    result.context_window = agent_pi.context_window("anthropic", model_id)
-    if result.returncode != 0 and not result.text:
+    # A valve kill is the salvage path, not a failure - it must not raise even with
+    # no assistant text; the engine synthesizes a handoff from git and continues.
+    if result.returncode != 0 and not result.text and not result.overflowed:
         raise RuntimeError(
             f"claude-agent-sdk turn did not succeed for model {model_id!r} "
             f"(no assistant text; ResultMessage.subtype != success)")

@@ -96,6 +96,16 @@ const ObservabilitySchema = z.object({
   poll_ms: z.number().default(500),
 });
 
+// Mirror of data_types.py: ContinuationConfig - the chained-builder (context-window
+// handoff) policy. occupancy_threshold is a fraction in (0, 1]; max_instances >= 1.
+// Defaults match the Pydantic model so a config with no `continuation:` block reads
+// identically on both sides.
+const ContinuationSchema = z.object({
+  enabled: z.boolean().default(true),
+  occupancy_threshold: z.number().gt(0).lte(1).default(0.8),
+  max_instances: z.number().int().gte(1).default(3),
+});
+
 // Mirror of QualityCheckConfig: one deterministic quality command. The map key
 // (in the parent record) supplies the name; `timeout` is seconds; area/operation
 // are optional trace classifiers that default in the engine. `argv` must be a
@@ -154,6 +164,9 @@ const SandboxConfigSchema = z.object({
 export const RosterConfigSchema = z.object({
   defaults: ConfigDefaultsSchema.default({}),
   observability: ObservabilitySchema.default({}),
+  // The chained-builder policy; default (no `continuation:` block) = enabled with a
+  // 0.8 valve and a 3-instance cap. Mirrors SSSFConfig.continuation.
+  continuation: ContinuationSchema.default({}),
   // A map of name → command; empty by default. Mirrors SSSFConfig.quality.
   quality: z.record(z.string(), QualityCheckSchema).default({}),
   // Per-project sandbox provisioning; empty (no `sandbox:` block) = every run is
