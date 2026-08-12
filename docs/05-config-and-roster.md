@@ -118,7 +118,7 @@ config class.
 | Field | Type | Default |
 |---|---|---|
 | `name` | `str` | — |
-| `coding_agent` | `Literal["pi", "claude_code"]` | `"pi"` |
+| `coding_agent` | `Literal["pi", "claude_code", "cursor"]` | `"pi"` |
 | `model` | `str` | `"google/gemini-3.6-flash"` |
 | `thinking` | `str` | `"medium"` |
 | `color` | `str` | `""` |
@@ -138,7 +138,7 @@ anything, `write` reaches any path):
 
 | Field | Type | Default |
 |---|---|---|
-| `coding_agent` | `Literal["pi", "claude_code"]` | `"pi"` |
+| `coding_agent` | `Literal["pi", "claude_code", "cursor"]` | `"pi"` |
 | `model` | `str` | `"google/gemini-3.6-flash"` |
 | `thinking` | `str` | `"medium"` |
 | `color` | `str` | `""` |
@@ -220,12 +220,14 @@ construction here, before any run starts.
 Separately, `validate(cfg, required)` — called by each ADW's `main()` after
 `load_config` — fail-fast checks the agent names the ADW actually needs:
 - Resolves each name (`resolve()`) — `SystemExit` listing available names if missing.
-- Checks `coding_agent in ("pi", "claude_code")`.
+- Checks `coding_agent in ("pi", "claude_code", "cursor")`.
 - Checks both `prompt_engineering.system` and `.user` paths exist on disk.
 - If `coding_agent == "pi"`: calls `agent_pi.resolve_model(agent.model)` — the live
   check against pi's `--list-models` catalog (§4).
 - If `coding_agent == "claude_code"` and the model contains `/` but doesn't start with
   `anthropic/`: flagged as a problem.
+- If `coding_agent == "cursor"` and the model contains `/` but doesn't start with
+  `cursor/`: flagged as a problem (namespace symmetry; Cursor models resolve at call time).
 - All problems accumulate; any of them raises `SystemExit` — nothing runs.
 
 **`load_config`'s `path` argument is CWD-relative, never resolved against
@@ -239,13 +241,14 @@ spawns.
 
 ---
 
-## 4. `coding_agent` routing — pi vs claude_code
+## 4. `coding_agent` routing — pi vs claude_code vs cursor
 
-`AgentConfig.coding_agent: Literal["pi", "claude_code"] = "pi"` is the single switch.
-Dispatch happens inside `agents.py::execute()`'s inner `send()` closure:
+`AgentConfig.coding_agent: Literal["pi", "claude_code", "cursor"] = "pi"` is the single
+switch. Dispatch happens inside `agents.py::execute()`'s inner `send()` closure:
 
 ```python
-backend = agent_cc if agent.coding_agent == "claude_code" else agent_pi
+backend = {"claude_code": agent_cc, "cursor": agent_cursor}.get(
+    agent.coding_agent, agent_pi)
 result = backend.run(request, on_event=..., on_spawn=..., on_exit=...)
 ```
 
@@ -253,12 +256,26 @@ result = backend.run(request, on_event=..., on_spawn=..., on_exit=...)
 |---|---|---|---|
 | `pi` (default) | `agent_pi.py` | pi's own auth in `~/.pi/agent` | `resolve_model()` — live check against `pi --list-models` at `validate()` time |
 | `claude_code` | `agent_cc.py` | local `claude` CLI login (no API key) via `claude-agent-sdk` | Light: expects an `anthropic/` prefix; real validation happens at SDK call time |
+| `cursor` | `agent_cursor.py` | local `cursor-agent login` (no API key) | Light: expects a `cursor/` prefix; Cursor resolves the model at call time (`cursor-agent --list-models`) |
 
-Both backends return the identical `PiResult` shape (`agent_cc` re-emits tool calls in
-pi's event shape), so the rest of `execute()` — parsing, gating, permission
-enforcement, tracing — is backend-agnostic. See
-[03-agents-and-gates.md](03-agents-and-gates.md) for the gate/envelope contract both
+All three backends return the identical `PiResult` shape (`agent_cc`/`agent_cursor`
+re-emit tool calls in pi's event shape), so the rest of `execute()` — parsing, gating,
+permission enforcement, tracing — is backend-agnostic. See
+[03-agents-and-gates.md](03-agents-and-gates.md) for the gate/envelope contract all
 backends feed into.
+
+**The `cursor` backend, in brief.** `cursor-agent -p … --output-format stream-json --force
+--sandbox disabled --trust --workspace <repo_root>`, tailed as NDJSON like `pi`. It reaches
+Cursor's whole model surface (Anthropic, OpenAI, Grok, Kimi, Composer) under one subscription
+login. Because Cursor has no `--system-prompt` flag, the agent's system prompt is carried *in*
+the prompt (`_compose_prompt`) — the envelope contract survives intact. Two bounded
+degradations: **cost is always `$0`** (Cursor reports no per-call dollars — tokens are exact),
+and the **chained-builder occupancy valve is inert** (usage arrives only on the terminal event,
+so `context_kill_threshold` cannot measure mid-run occupancy — a cursor builder relies on the
+cooperative handoff). `thinking` is baked into the model id (`cursor/claude-opus-4-8-thinking-high`),
+and `harness_engineering` / `--tools` filtering do not apply. **Anthropic still always routes to
+`claude_code`**, even over an explicit `coding_agent: cursor` — to reach Claude through Cursor,
+name a `cursor/claude-*` model, never `anthropic/*`.
 
 **The machine gotcha:** pi's Anthropic OAuth is expired here, so pi can currently only
 authenticate `openai-codex/*` models. `planner` and `scout` need `anthropic/*` models,

@@ -45,11 +45,11 @@ agents:
 
 | Field | Type | Meaning |
 |---|---|---|
-| `coding_agent` | `claude_code` \| `pi` | Which backend runs the agent. **Both are real.** `claude_code` is the default (drives Claude via the `claude-agent-sdk`); `pi` drives non-Anthropic models via the `pi` CLI. Any `anthropic/*` model is always forced to `claude_code` — see Backends below. |
+| `coding_agent` | `claude_code` \| `pi` \| `cursor` | Which backend runs the agent. **All three are real.** `claude_code` is the default (drives Claude via the `claude-agent-sdk`); `pi` drives non-Anthropic models via the `pi` CLI; `cursor` drives Cursor's models via the `cursor-agent` CLI (`cursor/` model namespace). Any `anthropic/*` model is always forced to `claude_code` — see Backends below. |
 | `model` | string | Model id, always `provider/model-id`. Default `anthropic/claude-sonnet-5` (run through `claude_code`, no API key). |
 | `thinking` | enum | Thinking budget — see below. Default `medium`. |
 | `color` | hex string | Lane color for every agent that does not set its own. Default empty — the cockpit falls back to its own palette. |
-| `harness_engineering` | list[string] | Per-agent harness extensions. `pi`: extension file paths. `claude_code`: none needed — leave empty. |
+| `harness_engineering` | list[string] | Per-agent harness extensions. `pi`: extension file paths. `claude_code` / `cursor`: none needed — leave empty (silently ignored). |
 | `tools` | list[string] | Roster-wide tool allowlist. Every agent that omits its own `tools` inherits this. Unset = all tools usable. |
 | `protected_files` | list[string] | Paths **no** agent may modify unless it names them in its own `writes`. Default: `adws/adw_modules/`, `adws/adw_sssf_config/`, `adws/adw_*.py` — an agent must not be able to edit the machinery that decides whether its work passed. |
 | `data_dir` | path | Runtime home. Sessions land at `{data_dir}/sessions/{adw_id}/{agent_name}/`. Default `adws/adw_data`. |
@@ -78,14 +78,15 @@ Output types are deliberately absent: config defines who an agent *is*; the ADW 
 
 ## Backends
 
-Both coding-agent backends are real and interchangeable behind one abstraction (`agent_cc.run` mirrors `agent_pi.run`'s contract):
+All three coding-agent backends are real and interchangeable behind one abstraction (each exposes the same `run(...) -> PiResult` contract; `agent_cc.run` / `agent_cursor.run` mirror `agent_pi.run`):
 
 - **`claude_code`** (default) drives Claude via the `claude-agent-sdk`, authenticating with the local **`claude` CLI login — no API key**. It runs in isolation (`setting_sources: []`), so no ambient CLAUDE.md or skills leak in.
 - **`pi`** drives non-Anthropic models (e.g. `openai-codex/*`) via the `pi` CLI, authenticating from `~/.pi/agent`.
+- **`cursor`** drives Cursor's models via the **`cursor-agent` CLI** (`cursor-agent login` — **no API key**), proxying Anthropic/OpenAI/Grok/Kimi/Composer under one subscription. Model ids use the **`cursor/` namespace** (`cursor/auto`, `cursor/claude-opus-4-8-thinking-high`; see `cursor-agent --list-models`). Own subprocess + tailed NDJSON like `pi`; tool events re-emitted in pi's shape like `claude_code`. **Two bounded degradations:** cost is always `$0` (Cursor bills by subscription — tokens are exact), and the chained-builder occupancy valve is inert (usage arrives only on the terminal event → a cursor builder relies on the cooperative handoff). There is no `--system-prompt` flag, so the system prompt rides *in* the prompt; `thinking` is baked into the model id, and `harness_engineering` / `--tools` filtering do not apply.
 
-Two behaviors are worth pinning down:
+Behaviors worth pinning down:
 
-- **Anthropic is always `claude_code`.** `agents.py::load_config` forces `coding_agent: claude_code` for any `anthropic/*` model, overriding even an explicit `coding_agent: pi`. pi no longer supports Anthropic at all, so a roster cannot mis-route it — a stray `coding_agent: pi` on an Anthropic agent is silently corrected at load.
+- **Anthropic is always `claude_code`.** `agents.py::load_config` forces `coding_agent: claude_code` for any `anthropic/*` model, overriding even an explicit `coding_agent: pi` **or `coding_agent: cursor`**. pi no longer supports Anthropic at all, so a roster cannot mis-route it — a stray `coding_agent: pi` on an Anthropic agent is silently corrected at load. To reach Claude *through* Cursor, name a `cursor/claude-*` model, never `anthropic/*`.
 - **Repo guidance reaches `claude_code` agents.** Because the SDK runs in isolation, `agents.execute` injects the repo-root guidance file — `AGENTS.md`, else `CLAUDE.md` — into a `claude_code` agent's system prompt, so it sees this project's own conventions. `pi` discovers `AGENTS.md`/`CLAUDE.md` from the working directory natively and is left untouched.
 
 ## Defaults merging
@@ -100,7 +101,7 @@ The thinking-budget ladder, lowest to highest:
 off | minimal | low | medium | high | xhigh | max
 ```
 
-Both backends honor it: `claude_code` maps it to Claude's thinking budget, `pi` to its reasoning-effort control. Under `pi` it only bites when the model is registered with `reasoning: true`; on a non-reasoning model the setting is inert — no error, no effect. Rough guidance: `high`/`xhigh` for planners and reviewers, `medium` for builders, `low` for mechanical read-and-report agents.
+`claude_code` maps it to Claude's thinking budget, `pi` to its reasoning-effort control. Under `pi` it only bites when the model is registered with `reasoning: true`; on a non-reasoning model the setting is inert — no error, no effect. **`cursor` ignores it** — Cursor bakes the reasoning level into the model id itself (e.g. `cursor/claude-opus-4-8-thinking-high`), so pick the variant rather than setting `thinking`. Rough guidance: `high`/`xhigh` for planners and reviewers, `medium` for builders, `low` for mechanical read-and-report agents.
 
 ## Model resolution
 

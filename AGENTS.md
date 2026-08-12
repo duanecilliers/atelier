@@ -86,12 +86,24 @@ client component can import them without dragging `node:fs` into the bundle).
   deterministically accepts or rejects it. Agents never decide their own acceptance - that
   boundary is the whole point.
 
-### Two coding-agent backends (config key `coding_agent:`)
+### Three coding-agent backends (config key `coding_agent:`)
 
-`agents.execute()` treats both identically behind one abstraction:
+`agents.execute()` treats all three identically behind one abstraction (each exposes the same
+`run(request, on_event, on_spawn, on_exit) -> PiResult` contract):
 - `pi` → `agent_pi.py`, drives GPT-5.6 etc. via the `pi` CLI (auth in `~/.pi/agent`).
 - `claude_code` → `agent_cc.py`, drives Claude via `claude-agent-sdk` using the local `claude`
   CLI's own login (**no API key**). `agent_cc.run` mirrors `agent_pi.run`'s contract exactly.
+- `cursor` → `agent_cursor.py`, drives Cursor's models via the `cursor-agent` CLI (`cursor-agent
+  login`, **no API key**), proxying Anthropic/OpenAI/Grok/Kimi/Composer. Own subprocess + tailed
+  NDJSON like `pi`; tool events re-emitted in pi's shape like `agent_cc`. Model ids use the
+  **`cursor/` namespace** (`cursor/auto`, `cursor/claude-opus-4-8-thinking-high`). Two bounded
+  degradations, both documented in the module: **no dollar cost** (Cursor bills by subscription -
+  `cost` is always 0; tokens are exact), and the **chained-builder occupancy valve is inert**
+  (Cursor reports usage only on the terminal event, so there is no mid-run occupancy to hard-kill
+  against - the cooperative handoff remains the chaining safety, exactly as `agent_cc.py` notes for
+  the same case). There is no `--system-prompt` flag, so the agent's system prompt rides *in* the
+  prompt; `thinking` is baked into the model id, and `harness_engineering` (pi `-e` extensions) /
+  `--tools` filtering do not apply.
 
 **Project guidance reaches every agent.** So an agent working in a *stamped* repo sees that
 project's conventions: `pi` discovers `AGENTS.md`/`CLAUDE.md` from cwd natively, and because the
@@ -104,7 +116,9 @@ prompt explicitly. Deterministic and leak-free: exactly one engine-chosen file, 
 `agents.py::load_config` **forces `coding_agent: claude_code` for any `anthropic/*` model**,
 overriding whatever the roster says - pi only ever runs non-Anthropic models (e.g.
 `openai-codex/*`). A roster can't mis-route Anthropic: a stray `coding_agent: pi` on an
-`anthropic/*` agent is silently corrected to `claude_code` at load. Also, `pi` 0.81.1 has no
+`anthropic/*` agent is silently corrected to `claude_code` at load - this beats an explicit
+`coding_agent: cursor` too, so to reach Claude *through* Cursor you name a `cursor/claude-*` model,
+never `anthropic/*`. Also, `pi` 0.81.1 has no
 `~/.pi/agent/models.json`, so `engine/.env` sets `PI_MODELS_PATH` to a committed stub (and
 `agent_pi.context_window()` degrades to 0/unknown when even that is absent, e.g. a stamped repo).
 

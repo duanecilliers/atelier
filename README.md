@@ -137,7 +137,7 @@ uv run engine/adws/adw_worker.py --supervise   # reads the registry; the ONLY th
 Start/stop a project's worker from the cockpit sidebar footer: it writes a
 `workerDesired` flag the supervisor disposes; the cockpit itself never spawns a process.
 
-## Two coding-agent backends
+## Three coding-agent backends
 
 The engine picks a backend per agent via `coding_agent:` in the config (D1 in the plan):
 
@@ -145,10 +145,12 @@ The engine picks a backend per agent via `coding_agent:` in the config (D1 in th
 | ------------- | -------------- | ----------------------------- | ---- |
 | **pi**        | `pi`           | GPT-5.6 (Sol/Terra/Luna), etc | pi's own (`~/.pi/agent`) |
 | **Claude SDK**| `claude_code`  | Claude (Haiku/Sonnet/Opus)    | Claude Code's own login (`claude`) |
+| **Cursor CLI**| `cursor`       | Cursor's models (`cursor/*`: Anthropic/OpenAI/Grok/Kimi/Composer) | Cursor login (`cursor-agent login`) |
 
-`agent_cc.py` implements the Claude backend against `claude-agent-sdk`; it mirrors
-`agent_pi.run`'s contract exactly (streamed tool events, envelope text, cost/usage,
-session resume) so `agents.execute()` treats both identically.
+`agent_cc.py` (Claude SDK) and `agent_cursor.py` (Cursor CLI) each mirror `agent_pi.run`'s
+contract exactly (streamed tool events, envelope text, usage, session resume) so
+`agents.execute()` treats all three identically. The Cursor backend reports no dollar cost
+(subscription billing) and has an inert context-window valve (cooperative handoff only).
 
 **Current roster:** scout → `anthropic/claude-haiku-4-5` (Claude SDK); builder →
 `openai-codex/gpt-5.6-sol` (pi); planner → `anthropic/claude-fable-5`.
