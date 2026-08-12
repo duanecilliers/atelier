@@ -61,6 +61,53 @@ def test_non_anthropic_stays_pi(tmp_path):
     assert _by_name(cfg, "builder").coding_agent == "pi"
 
 
+def test_cursor_backend_is_not_forced(tmp_path):
+    # cursor owns its own namespace, so the anthropic/* -> claude_code forcing must
+    # leave a cursor agent alone (a cursor/ model never trips the anthropic check).
+    cfg = agents.load_config(_cfg(tmp_path, """
+        defaults: {coding_agent: pi, model: openai-codex/x}
+        agents:
+          - name: scout
+            coding_agent: cursor
+            model: cursor/auto
+            prompt_engineering: {system: s.md, user: u.md}
+    """))
+    scout = _by_name(cfg, "scout")
+    assert scout.coding_agent == "cursor" and scout.model == "cursor/auto"
+
+
+def test_validate_rejects_non_cursor_model_on_cursor_backend(tmp_path):
+    # Symmetry with the claude_code -> anthropic/ check: a cursor agent must name a
+    # cursor/ model, or the namespace guarantee is meaningless. A NON-anthropic
+    # model is used on purpose: anthropic/* is force-rerouted to claude_code at
+    # load (test_anthropic_beats_cursor covers that), so it never reaches this guard.
+    prompts = tmp_path / "s.md"; prompts.write_text("x")
+    cfg = agents.load_config(_cfg(tmp_path, f"""
+        defaults: {{coding_agent: pi, model: openai-codex/x}}
+        agents:
+          - name: scout
+            coding_agent: cursor
+            model: openai/gpt-5
+            prompt_engineering: {{system: {prompts}, user: {prompts}}}
+    """))
+    with pytest.raises(SystemExit, match="cursor expects a cursor/ model"):
+        agents.validate(cfg, ["scout"])
+
+
+def test_anthropic_beats_cursor(tmp_path):
+    # "Anthropic is always claude_code" wins even over an explicit coding_agent:
+    # cursor — to reach Claude through Cursor, name a cursor/ model, not anthropic/*.
+    cfg = agents.load_config(_cfg(tmp_path, """
+        defaults: {coding_agent: pi, model: openai-codex/x}
+        agents:
+          - name: scout
+            coding_agent: cursor
+            model: anthropic/claude-haiku-4-5
+            prompt_engineering: {system: s.md, user: u.md}
+    """))
+    assert _by_name(cfg, "scout").coding_agent == "claude_code"
+
+
 # ── the chained builder (context-window handoff) ─────────────────────────────
 
 def _fake_run(agent_map=None):
@@ -264,6 +311,43 @@ class TestRunInstanceOverflow:
         # instead of the phase hard-failing on an unparseable correction turn.
         assert envelope is None
         assert result.overflowed is True
+
+    def test_backend_dispatch_selects_by_coding_agent(self, tmp_path, monkeypatch):
+        # send() routes to the backend named by agent.coding_agent:
+        #   {"claude_code": agent_cc, "cursor": agent_cursor}.get(x, agent_pi)
+        # Prove a `cursor` agent reaches agent_cursor.run (and NOT agent_pi/agent_cc),
+        # and that the default falls through to agent_pi - the seam this whole feature
+        # hangs on, otherwise covered only by a live run.
+        from adw_modules.data_types import AgentCall, GenericOutput, PiResult
+
+        monkeypatch.setattr(agents.prompts, "render", lambda *a, **k: "")
+        monkeypatch.setattr(agents.prompts, "save", lambda *a, **k: None)
+        monkeypatch.setattr(agents, "project_guidance", lambda root: None)
+        monkeypatch.setattr(agents.permissions, "enforce", lambda *a, **k: [])
+        monkeypatch.setattr(agents, "_persist_envelope", lambda *a, **k: None)
+
+        called: list[str] = []
+        ok = PiResult(text='{"status": "success"}')
+        monkeypatch.setattr(agents.agent_cursor, "run", lambda request, **kw: called.append("cursor") or ok)
+        monkeypatch.setattr(agents.agent_cc, "run", lambda request, **kw: called.append("cc") or ok)
+        monkeypatch.setattr(agents.agent_pi, "run", lambda request, **kw: called.append("pi") or ok)
+
+        call = AgentCall(output_type=GenericOutput, prompt="task")
+        phase = SimpleNamespace(phase_id="p", params=SimpleNamespace(retries=1), attempt=0)
+
+        def run_once(coding_agent: str, model: str) -> None:
+            called.clear()
+            agent = AgentConfig(name="a", coding_agent=coding_agent, model=model,
+                                prompt_engineering=PromptEngineering(system="s.md", user="u.md"))
+            agents._run_instance(self._stub_run(tmp_path), phase, agent, call, tmp_path,
+                                 "task", "sess-1", None, 1, tree_before=object())
+
+        run_once("cursor", "cursor/auto")
+        assert called == ["cursor"]
+        run_once("pi", "openai-codex/x")        # default fall-through
+        assert called == ["pi"]
+        run_once("claude_code", "anthropic/claude-haiku-4-5")
+        assert called == ["cc"]
 
 
 class TestExtractJson:

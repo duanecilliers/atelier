@@ -15,7 +15,7 @@ from typing import Optional
 
 import yaml
 
-from . import agent_cc, agent_pi, git_helper, permissions, prompts
+from . import agent_cc, agent_cursor, agent_pi, git_helper, permissions, prompts
 from .data_types import (AgentCall, AgentConfig, BuildOutput, EnvelopeBase,
                          EventRecord, GateCheck, GateReport, Phase, PiRequest,
                          SSSFConfig, UsageBreakdown)
@@ -100,9 +100,9 @@ def validate(cfg: SSSFConfig, required: list[str]) -> None:
         except SystemExit as e:
             problems.append(str(e))
             continue
-        if agent.coding_agent not in ("pi", "claude_code"):
+        if agent.coding_agent not in ("pi", "claude_code", "cursor"):
             problems.append(f"agent {name!r}: coding_agent {agent.coding_agent!r} "
-                            f"is not supported (use 'pi' or 'claude_code')")
+                            f"is not supported (use 'pi', 'claude_code', or 'cursor')")
         # Prompt files are config assets in the adws/adw_data tree, not the
         # execution surface - under a sandbox run cwd is the worktree (which need
         # not even contain adws/), so anchor them at trace_root() like the sink,
@@ -126,6 +126,12 @@ def validate(cfg: SSSFConfig, required: list[str]) -> None:
         elif agent.coding_agent == "claude_code" and "/" in agent.model \
                 and not agent.model.startswith("anthropic/"):
             problems.append(f"agent {name!r}: claude_code expects an anthropic/ model, "
+                            f"got {agent.model!r}")
+        # cursor owns its own namespace so it never collides with pi's catalog or
+        # the anthropic/* -> claude_code forcing; models resolve at call time.
+        elif agent.coding_agent == "cursor" and "/" in agent.model \
+                and not agent.model.startswith("cursor/"):
+            problems.append(f"agent {name!r}: cursor expects a cursor/ model, "
                             f"got {agent.model!r}")
     if problems:
         raise SystemExit("config validation failed:\n- " + "\n- ".join(problems))
@@ -164,6 +170,15 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
     # so enabled, a build phase, and a cap of at least 2. `max_instances: 1` is the
     # documented "off" switch and behaves exactly like the pre-continuation engine.
     chaining = cont.enabled and is_build and cont.max_instances >= 2
+
+    # The `cursor` backend reports usage only on its terminal event and manages its
+    # own context window internally, so Atelier's occupancy safety valve cannot fire
+    # for a cursor builder - chaining relies ENTIRELY on the cooperative handoff (the
+    # builder emitting continuation=needs_continuation). Surface that at the build
+    # phase so an operator isn't surprised the hard-kill valve never trips.
+    if chaining and agent.coding_agent == "cursor":
+        run.console.note(f"{agent.name}: cursor builder - the context-window valve is inert "
+                         f"(Cursor owns its window); chaining uses cooperative handoff only")
 
     if chaining:
         def run_instance(prompt_text: str, instance: int):
@@ -354,10 +369,11 @@ def _run_instance(run, phase: Phase, agent: AgentConfig, call: AgentCall,
             context_kill_threshold=context_threshold,
         )
         # Agent proposes, code disposes — through whichever backend the config
-        # names. Both expose the same run() contract and return the same PiResult;
-        # agent_cc re-emits tool calls in pi's event shape so the forwarder below
-        # records them identically.
-        backend = agent_cc if agent.coding_agent == "claude_code" else agent_pi
+        # names. All three expose the same run() contract and return the same
+        # PiResult; agent_cc/agent_cursor re-emit tool calls in pi's event shape so
+        # the forwarder below records them identically.
+        backend = {"claude_code": agent_cc, "cursor": agent_cursor}.get(
+            agent.coding_agent, agent_pi)
         result = backend.run(
             request,
             on_event=_event_forwarder(run, phase, agent.name),
