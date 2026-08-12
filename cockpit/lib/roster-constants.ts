@@ -7,7 +7,7 @@
  * These mirror the Literal/enum options in engine/adws/adw_modules/data_types.py
  * — keep them in lockstep with the Pydantic models (see AGENTS.md).
  */
-export const CODING_AGENTS = ['pi', 'claude_code'] as const;
+export const CODING_AGENTS = ['pi', 'claude_code', 'cursor'] as const;
 export type CodingAgent = (typeof CODING_AGENTS)[number];
 
 export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
