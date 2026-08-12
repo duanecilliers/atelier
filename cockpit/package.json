@@ -1,6 +1,6 @@
 {
   "name": "atelier-cockpit",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "description": "Atelier cockpit — operator console over the SSSF engine's sssf.db",
   "scripts": {
