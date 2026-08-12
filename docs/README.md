@@ -37,7 +37,7 @@ New to the system? Read these two, in order — everything else assumes their vo
 | --- | --- | --- |
 | 01 | [Architecture](01-architecture.md) | The whole mental model and the invariants to preserve. |
 | 02 | [Engine runtime](02-engine-runtime.md) | The run lifecycle: `session` → `Run` → phases → `finish`; the tracer, the trace schema, `git_helper`, kill-safe finalization. |
-| 03 | [Agents & gates](03-agents-and-gates.md) | The propose/dispose boundary: `agents.execute()`, the two backends, typed envelopes, gates, the write boundary, deterministic quality blocks. |
+| 03 | [Agents & gates](03-agents-and-gates.md) | The propose/dispose boundary: `agents.execute()`, the three backends, typed envelopes, gates, the write boundary, deterministic quality blocks. |
 | 04 | [Authoring ADWs](04-authoring-adws.md) | The ADW catalog, the phase-chain skeleton, `make_adw.py`, and hand-authoring a new workflow. |
 | 05 | [Config & roster](05-config-and-roster.md) | `sssf.config.yaml`: agents, models, prompts, tool/write boundaries, backend routing, and the cockpit roster editor. |
 | 06 | [The cockpit](06-cockpit.md) | The Next.js app: routes, the `lib/` layer, the three live (SSE) paths, the design system, and the read/write surfaces. |

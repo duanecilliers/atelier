@@ -112,13 +112,19 @@ stay in lockstep. Only the first is machine-checked.
 silently corrupts the reader. This is the #1 rule; the checklist lives in
 [Extending the system](08-extending-the-system.md).
 
-## Two coding-agent backends
+## Three coding-agent backends
 
-`agents.execute()` treats both identically behind one abstraction (config key `coding_agent:`):
+`agents.execute()` treats all three identically behind one abstraction (config key
+`coding_agent:`); each exposes the same `run(...) -> PiResult` contract:
 
 - `pi` → `agent_pi.py`, drives models like GPT-5.6 via the `pi` CLI (auth in `~/.pi/agent`).
 - `claude_code` → `agent_cc.py`, drives Claude via `claude-agent-sdk` using the local `claude`
   CLI's own login (**no API key**).
+- `cursor` → `agent_cursor.py`, drives Cursor's models via the `cursor-agent` CLI
+  (`cursor-agent login`, **no API key**), proxying Anthropic/OpenAI/Grok/Kimi/Composer. Model ids
+  use the `cursor/` namespace. Two bounded degradations: no dollar cost (subscription billing) and
+  no live context-window valve (usage arrives only on the terminal event → cooperative handoff
+  only). See [Config & roster](05-config-and-roster.md).
 
 **Machine gotcha on this box:** pi's Anthropic OAuth is expired, so pi can only run
 `openai-codex/*` models — which is *why* Claude agents (`planner`, `scout`) route through the

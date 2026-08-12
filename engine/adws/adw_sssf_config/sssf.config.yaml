@@ -227,3 +227,27 @@ agents:
       - bash
       - write
       - edit
+
+  # ── Cursor backend (opt-in exemplar) ────────────────────────────────────────
+  # A third coding_agent, `cursor`, drives Cursor's models through the
+  # `cursor-agent` CLI (auth via `cursor-agent login` — no API key, like
+  # claude_code). It proxies Anthropic, OpenAI, Grok, Kimi, and Cursor's own
+  # Composer. Model ids use the `cursor/` namespace (e.g. cursor/auto,
+  # cursor/claude-opus-4-8-thinking-high; see `cursor-agent --list-models`).
+  # Two known degradations, both bounded: NO dollar cost (Cursor bills by
+  # subscription — cost is always $0), and the chained-builder occupancy valve is
+  # inert (Cursor reports usage only on the terminal event), so a cursor builder
+  # relies on the cooperative handoff. `thinking` is baked into the model id, and
+  # `harness_engineering` (pi -e extensions) / `--tools` filtering do not apply.
+  # Uncomment to add a Cursor-backed recon agent:
+  #
+  # - name: scout_cursor
+  #   coding_agent: cursor
+  #   model: cursor/auto
+  #   color: "#34d399"
+  #   purpose: Find and report where things live; change nothing.
+  #   prompt_engineering:
+  #     system: engine/adws/adw_data/prompt_engineering/scout/system.md
+  #     user: engine/adws/adw_data/prompt_engineering/scout/user.md
+  #   writes: []
+  #   tools: [read, grep, find, ls, bash, write]

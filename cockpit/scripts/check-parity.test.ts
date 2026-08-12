@@ -80,7 +80,7 @@ describe('checkRosterMirror', () => {
     // Drop a coding_agent literal on the Python side only.
     const repo = stage(ROSTER_FILES, {
       rel: 'engine/adws/adw_modules/data_types.py',
-      fn: (s) => s.replaceAll('Literal["pi", "claude_code"]', 'Literal["pi"]'),
+      fn: (s) => s.replaceAll('Literal["pi", "claude_code", "cursor"]', 'Literal["pi"]'),
     });
     const { problems } = checkRosterMirror(repo);
     expect(problems.some((p) => p.includes('coding_agent') && p.includes('claude_code'))).toBe(true);

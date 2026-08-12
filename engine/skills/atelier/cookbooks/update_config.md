@@ -14,7 +14,7 @@ Edit the agent's entry in place:
 
 Write the model as `provider/model-id`, never a bare id. The same model is usually carried by several providers, and an ambiguous pattern raises in `agents.validate()` — grounding every agent that inherits it. See `references/config.md`.
 
-Thinking levels are a neutral thinking-budget ladder: `off | minimal | low | medium | high | xhigh | max`. Both backends honor it — `claude_code` maps it to Claude's thinking budget, `pi` to its reasoning-effort control (there it only bites when the model is registered with `reasoning: true`; on a non-reasoning model the setting is inert).
+Thinking levels are a neutral thinking-budget ladder: `off | minimal | low | medium | high | xhigh | max`. `claude_code` maps it to Claude's thinking budget, `pi` to its reasoning-effort control (there it only bites when the model is registered with `reasoning: true`; on a non-reasoning model the setting is inert). `cursor` ignores it — the reasoning level is baked into the model id (e.g. `cursor/claude-opus-4-8-thinking-high`).
 
 **A model change means a fresh session.** `agent_map.json` records the model each coding-agent session was created with. When a joined run (`--adw-id`) finds the config's model no longer matches the recorded one, that agent starts a **new** session rather than resuming — the map is updated, never a bad resume. Thinking changes do not invalidate a session; model changes do. Expect the agent to lose its accumulated context window on the first run after the change.
 

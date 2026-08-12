@@ -135,7 +135,7 @@ Deep specs, when needed: [references/config.md](references/config.md) ·
 
 ## Backends & the cockpit
 
-Two coding-agent backends sit behind one abstraction (`coding_agent:` in the roster);
+Three coding-agent backends sit behind one abstraction (`coding_agent:` in the roster);
 `agents.execute()` treats them identically:
 
 - **`claude_code` is the default.** It drives Claude via `claude-agent-sdk` using your local
@@ -145,9 +145,15 @@ Two coding-agent backends sit behind one abstraction (`coding_agent:` in the ros
   is how the agent sees *this project's* conventions.
 - **`pi`** drives non-Anthropic models (e.g. `openai-codex/*`) via the `pi` CLI. It discovers
   `AGENTS.md`/`CLAUDE.md` from cwd natively.
+- **`cursor`** drives Cursor's models via the `cursor-agent` CLI (`cursor-agent login` — **no API
+  key**), proxying Anthropic/OpenAI/Grok/Kimi/Composer. Model ids use the `cursor/` namespace
+  (`cursor/auto`, `cursor/claude-opus-4-8-thinking-high`). Bounded degradations: cost is always
+  `$0` (subscription billing) and the context-window valve is inert (cooperative handoff only);
+  `thinking`/`harness_engineering` do not apply.
 - **Anthropic is always claude_code.** `agents.py::load_config` forces `coding_agent:
-  claude_code` for any `anthropic/*` model, overriding even an explicit `coding_agent: pi` —
-  pi no longer supports Anthropic. A roster cannot mis-route it.
+  claude_code` for any `anthropic/*` model, overriding even an explicit `coding_agent: pi` **or
+  `cursor`** — pi no longer supports Anthropic. A roster cannot mis-route it; reach Claude through
+  Cursor with a `cursor/claude-*` model, not `anthropic/*`.
 
 The UI is the **central Atelier cockpit**, not a per-repo app. To watch this repo, add it to
 the cockpit's `atelier.projects.json`:

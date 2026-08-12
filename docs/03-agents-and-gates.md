@@ -1,7 +1,7 @@
 # Agents and gates
 
 This doc covers everything that happens between an ADW calling `ph.call(AgentCall(...))` and
-the validated envelope that call returns: agent resolution, the two coding-agent backends,
+the validated envelope that call returns: agent resolution, the three coding-agent backends,
 typed envelopes, gates, the write-boundary enforcement, and the deterministic `quality.py`
 blocks. It assumes you've read [README.md](README.md) and
 [01-architecture.md](01-architecture.md) — the "agents propose, deterministic code disposes"
@@ -96,9 +96,9 @@ class AgentCall(BaseModel):
   `call.output_type.model_validate(payload)`; on failure, persists an invalid envelope row and
   sends a correction listing the required field names back into the same session.
 
-## 2. The two backends
+## 2. The three backends
 
-`agent_pi.py` and `agent_cc.py` expose the **identical** contract:
+`agent_pi.py`, `agent_cc.py`, and `agent_cursor.py` expose the **identical** contract:
 
 ```python
 def run(request: PiRequest,
@@ -108,7 +108,7 @@ def run(request: PiRequest,
 ```
 
 `agents.py` picks between them purely on `agent.coding_agent` (routed via config — see
-[05-config-and-roster.md](05-config-and-roster.md)). Because both take the same `PiRequest`
+[05-config-and-roster.md](05-config-and-roster.md)). Because all three take the same `PiRequest`
 input, return the same `PiResult`, and accept the same three callbacks, `execute()` is entirely
 backend-agnostic — it doesn't know or care which one actually ran.
 
@@ -148,12 +148,37 @@ backend-agnostic — it doesn't know or care which one actually ran.
   would; the determinism spine is unchanged (§6).
 - Re-emits Claude Agent SDK messages (`AssistantMessage`/`ToolUseBlock`,
   `UserMessage`/`ToolResultBlock`, `ResultMessage`) as synthesized `tool_execution_start`/`_end`
-  events shaped exactly like pi's, so the same `ToolCallTracker` handles both backends
+  events shaped exactly like pi's, so the same `ToolCallTracker` handles every backend
   unmodified.
 - `on_spawn`/`on_exit` are accepted for interface parity but never called — the SDK owns the
   `claude` subprocess and doesn't expose its pid.
 - Reuses `agent_pi.context_window("anthropic", model_id)` for the context ceiling, since Claude
   models share pi's model registry.
+
+### `agent_cursor.py` — the Cursor CLI backend
+
+- Authenticates via the local `cursor-agent login` — **no API key** — reaching Cursor's whole
+  model surface (Anthropic, OpenAI, Grok, Kimi, Composer) under one subscription. Models use the
+  `cursor/` namespace; `_model_id` strips it before passing to `--model`.
+- Spawns `cursor-agent -p --output-format stream-json --model <m> --force --sandbox disabled
+  --trust --workspace <cwd> [--resume <sid>] <prompt>` via `Popen(stdin=DEVNULL, cwd=repo_root)`,
+  like `pi` — so `on_spawn`/`on_exit` **are** wired (a hung cursor agent is a killable pid, unlike
+  CC). `--force --sandbox disabled --trust` is the headless posture; `permissions.enforce()` still
+  runs after the send, so the write boundary is unchanged (§6).
+- **No `--system-prompt` flag**, so `_compose_prompt` carries the agent's system prompt *in* the
+  prompt (`# System instructions … # Task …`). The envelope's `_extract_json` still recovers the
+  Report JSON from the tail of the response.
+- A module-level `_CURSOR_SESSIONS` map ties Atelier's synthetic `session_id` to Cursor's real
+  session uuid (captured from the `system/init` and `result` events), so later sends in the same
+  phase resume via `--resume`.
+- Re-emits Cursor's `tool_call` started/completed events (nested `{<name>ToolCall: {args, result}}`)
+  as `tool_execution_start`/`_end` in pi's shape; `_slim_args` drops Cursor's bulky shell parse
+  tree so the trace stays readable.
+- **Two bounded degradations.** Cursor reports no per-call cost, so `cost` is always `0` (tokens
+  are exact, read off the terminal `result.usage`). And because usage arrives *only* on that
+  terminal event, there is no mid-run occupancy to measure — `context_kill_threshold` is inert, so
+  a cursor builder relies on the cooperative handoff (the same "usage only on the terminal event"
+  case `agent_cc.py` documents). `context_window` is `0` (Cursor exposes no catalog).
 
 ### Machine gotcha
 
