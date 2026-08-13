@@ -26,7 +26,7 @@ Four mechanisms, each a small script or file, that hold together:
 │  target repo (any project)                                │  MANAGED = in the manifest
 │  adws/**  ·  adws/adw_sssf_config/sssf.config.yaml        │  USER    = never in the manifest
 │  .agents/skills/atelier/**  ·  .atelier/manifest.json     │  RUNTIME = gitignored (sessions, db)
-│  (.claude/skills, .pi/skills → ../.agents/skills)         │  cross-agent skill discovery
+│  (.claude/skills/atelier, .pi/skills/atelier → canonical) │  cross-agent skill discovery
 └──────────────┬───────────────────────────────────────────┘
    registry     │  cockpit/atelier.projects.json lists each project = one repo root
 ┌──────────────▼───────────────────────────────────────────┐
@@ -81,10 +81,11 @@ there is no committed `templates/` copy that could drift from the real engine. W
   `engine/skills/atelier/SKILL.md → .agents/skills/atelier/SKILL.md`. Adding a module, ADW, or skill
   file to the engine adds it to the managed set with no list to edit.
 - **Cross-agent skill symlinks** (not in the manifest): after copying, `_ensure_agent_skill_symlinks`
-  links `.claude/skills` and `.pi/skills` at `../.agents/skills`, so Claude Code, Codex (which reads
-  `.agents/skills` natively), and PI operators all discover the one stamped tree. It only ever links
-  where nothing (or an empty dir) is — a skills dir holding your own skills is left untouched. The
-  engine keeps this operator skill *out* of ADW coding agents: `agent_cc.py` isolates the Claude SDK
+  links each stamped skill *entry* into `.claude/skills/<skill>` and `.pi/skills/<skill>` → the
+  canonical `.agents/skills/<skill>`, so Claude Code, Codex (which reads `.agents/skills` natively),
+  and PI operators all discover it. Per-entry, so the links sit alongside whatever skills a target
+  already keeps in those dirs; a name that's already taken is left untouched. The engine keeps this
+  operator skill *out* of ADW coding agents: `agent_cc.py` isolates the Claude SDK
   (`setting_sources: []`) and `agent_pi.py` passes `--no-skills`.
 - **USER data, stamped once** (never in the manifest): the live `prompt_engineering/` tree, plus
   the authored starters from `engine/dist/` — `sssf.config.starter.yaml → adws/adw_sssf_config/sssf.config.yaml`
@@ -142,21 +143,22 @@ Your USER layer — roster, prompts, custom ADWs, your own skills — is not in 
 router plus cookbooks and references, written for the native `adws/` layout. It is the **single
 source**, and it is **agent-agnostic**: Claude Code, Codex, and PI all read the same `SKILL.md`
 format (the "Agent Skills spec"); they only differ in which dir they scan, and each follows
-symlinks. So the skill lands once at the vendor-neutral **`.agents/skills/atelier/`** and the other
-harnesses' dirs are symlinked to it:
+symlinks. So the skill lands once at the vendor-neutral **`.agents/skills/atelier/`** and is
+symlinked *per entry* into the other harnesses' dirs:
 
 - **Canonical location** — `.agents/skills/atelier/`. Codex reads `.agents/skills` natively (a
   first-class repo-scope path in its loader). `install.py::_ensure_agent_skill_symlinks` then links
-  **`.claude/skills` → `../.agents/skills`** (Claude Code) and **`.pi/skills` → `../.agents/skills`**
-  (PI). One tree, three consumers.
+  the entry into each vendor dir — **`.claude/skills/atelier` → `../../.agents/skills/atelier`**
+  (Claude Code) and the same into **`.pi/skills/`** (PI). Per-entry, not the whole dir, so the links
+  sit alongside whatever skills a target already keeps there. One tree, three consumers.
 - **The Atelier checkout** mirrors the same scheme — `.agents/skills/atelier` → `engine/skills/atelier`,
-  with the two vendor symlinks — so `/atelier` (and its Codex/PI equivalents) works in this repo too,
-  with zero drift.
+  with the two per-entry vendor symlinks — so `/atelier` (and its Codex/PI equivalents) works in this
+  repo too, with zero drift.
 - **`install.py` stamps** the real files into each target's `.agents/skills/atelier/` (it's in the
   managed scan) and creates the symlinks, so a stamped repo can drive itself from any of the three.
 - **`update.py` keeps it current** and **self-heals** — it migrates pre-`.agents` stamps (which kept
-  the skill at `.claude/skills`), prunes the emptied old dirs, and (re)creates the vendor symlinks. A
-  hand-edited cookbook is parked as `<file>.atelier-new`, never clobbered, like any managed file.
+  the skill at `.claude/skills`), prunes the emptied old dirs, and (re)creates the per-entry vendor
+  symlinks. A hand-edited cookbook is parked as `<file>.atelier-new`, never clobbered.
 
 The symlink helper is **conservative**: it only ever links where nothing (or an empty dir) is, so a
 vendor skills dir you filled with your own skills is left untouched.

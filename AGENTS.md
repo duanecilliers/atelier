@@ -171,11 +171,14 @@ and references written for the native `adws/` layout. It is the **single source*
 **agent-agnostic**: Claude Code, Codex, and PI all read the same `SKILL.md` format (the "Agent
 Skills spec"), they just look in different dirs and each follows symlinks. So the stamp lands
 the real files at the vendor-neutral **`.agents/skills/atelier/`** (a first-class path Codex
-scans natively) and symlinks the other two harnesses' dirs at it -
-**`.claude/skills` → `../.agents/skills`** (Claude Code) and **`.pi/skills` → `../.agents/skills`**
-(PI). One tree, three consumers. `install.py::_ensure_agent_skill_symlinks` creates those links
-idempotently and conservatively (never over a dir holding your own skills); `update.py`
-self-heals them and migrates pre-`.agents` stamps (which kept the skill at `.claude/skills`).
+scans natively) and symlinks that **skill entry** into the other two harnesses' dirs -
+**`.claude/skills/atelier` → `../../.agents/skills/atelier`** (Claude Code) and the same into
+**`.pi/skills/`** (PI). One tree, three consumers. The links are *per skill entry*, not the whole
+dir, so they drop in alongside whatever skills a target already keeps in `.claude/skills` /
+`.pi/skills`. `install.py::_ensure_agent_skill_symlinks` creates them idempotently and
+conservatively (only links a name that is free, and only for entries that exist under
+`.agents/skills`); `update.py` self-heals them and migrates pre-`.agents` stamps (which kept the
+skill at `.claude/skills`).
 The Atelier checkout mirrors the same scheme (`.agents/skills/atelier` → `engine/skills/atelier`,
 with the two vendor symlinks), so `/atelier` and its Codex/PI equivalents work here too.
 

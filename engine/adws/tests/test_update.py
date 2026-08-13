@@ -17,8 +17,8 @@ import update
 def _downgrade_to_pre_agents(target: Path) -> None:
     """Rewrite a fresh (new-layout) stamp back to the pre-.agents world: skill real
     files under .claude/skills, manifest keyed there, no vendor symlinks, no .agents."""
-    for rel in install.SKILL_SYMLINKS:
-        (target / rel).unlink(missing_ok=True)
+    for vendor in install.SKILL_VENDOR_DIRS:
+        shutil.rmtree(target / vendor, ignore_errors=True)   # drop the per-entry symlinks
     shutil.move(str(target / ".agents" / "skills"), str(target / ".claude" / "skills"))
     (target / ".agents").rmdir()
 
@@ -39,17 +39,17 @@ def test_migrates_old_claude_skills_layout(tmp_path):
 
     r = update.update(tmp_path, source)
 
-    # Skill moved to the canonical .agents/skills; old real dir cleaned up.
+    # Skill moved to the canonical .agents/skills; old real dir cleaned up + re-linked.
     assert (tmp_path / ".agents" / "skills" / "atelier" / "SKILL.md").is_file()
-    assert (tmp_path / ".claude" / "skills").is_symlink()
-    assert (tmp_path / ".pi" / "skills").is_symlink()
+    assert (tmp_path / ".claude" / "skills" / "atelier").is_symlink()
+    assert (tmp_path / ".pi" / "skills" / "atelier").is_symlink()
     assert (tmp_path / ".claude" / "skills" / "atelier" / "SKILL.md").is_file()  # resolves
 
-    # Manifest re-keyed under .agents/skills; the links were reported.
+    # Manifest re-keyed under .agents/skills; the per-skill links were reported.
     manifest = install.read_manifest(tmp_path)
     assert any(k.startswith(".agents/skills/atelier/") for k in manifest["stamped"])
     assert not any(k.startswith(".claude/skills/") for k in manifest["stamped"])
-    assert set(r["linked"]) == set(install.SKILL_SYMLINKS)
+    assert set(r["linked"]) == {".claude/skills/atelier", ".pi/skills/atelier"}
 
 
 def test_update_after_install_is_a_noop(tmp_path):
@@ -59,8 +59,8 @@ def test_update_after_install_is_a_noop(tmp_path):
     r = update.update(tmp_path, source)
 
     assert r["updated"] == [] and r["added"] == [] and r["conflicts"] == []
-    assert r["linked"] == []                       # symlinks already present
-    assert (tmp_path / ".claude" / "skills").is_symlink()
+    assert r["linked"] == []                       # per-skill symlinks already present
+    assert (tmp_path / ".claude" / "skills" / "atelier").is_symlink()
 
 
 def test_hand_edited_managed_skill_is_parked_not_clobbered(tmp_path):

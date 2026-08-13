@@ -105,9 +105,9 @@ def update(target: Path, source: Path) -> dict:
 
     # Migration + self-heal: pre-.agents stamps kept the skill at .claude/skills; the
     # removal pass above unlinked those files, so drop the empty dirs they left, then
-    # (re)establish the vendor symlinks → .agents/skills. Safe for repos that already
-    # have the links (no-op) and for ones carrying your own skills (left untouched).
-    for rel in install.SKILL_SYMLINKS:
+    # (re)establish the per-skill vendor symlinks → .agents/skills. Safe for repos that
+    # already have the links (no-op) and for ones carrying your own skills (untouched).
+    for rel in install.SKILL_VENDOR_DIRS:
         _prune_empty_tree(target / rel)
     linked = install._ensure_agent_skill_symlinks(target)
 
@@ -138,7 +138,7 @@ def main() -> int:
     for rel in r["kept"]:
         print(f"  KEPT      {rel} — removed upstream but you edited it")
     for rel in r["linked"]:
-        print(f"  LINKED    {rel} → ../.agents/skills (cross-agent skill discovery)")
+        print(f"  LINKED    {rel} → .agents/skills (cross-agent skill discovery)")
     if not any((r["updated"], r["added"], r["removed"], r["conflicts"],
                 r["kept"], r["linked"])):
         print("  already current — nothing to do")

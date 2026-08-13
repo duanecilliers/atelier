@@ -19,9 +19,9 @@ What lands, and why the buckets matter for updates (see update.py):
              updater keeps these current; a new module, ADW, or skill file is
              DISCOVERED by scanning engine/adws/ and engine/skills/, so it stamps
              automatically with no registry to edit. The skill lands at the
-             vendor-neutral .agents/skills/** (Codex reads it natively), with
-             .claude/skills and .pi/skills symlinked to it so Claude Code and PI
-             operators discover the same tree — see _ensure_agent_skill_symlinks.
+             vendor-neutral .agents/skills/** (Codex reads it natively), and each skill
+             entry is symlinked into .claude/skills/ and .pi/skills/ so Claude Code and
+             PI operators discover the same tree — see _ensure_agent_skill_symlinks.
   USER     — adws/adw_sssf_config/sssf.config.yaml, adws/adw_data/prompt_engineering/**,
              the justfile, .env.sample. Stamped ONCE and never in the manifest,
              so the updater never touches them — and anything YOU add later
@@ -70,8 +70,8 @@ def source_adws() -> Path:
 
 def source_skills(source: Path) -> Path:
     """The live operator-skill payload: engine/skills, sibling to engine/adws.
-    Stamped into the target's .agents/skills/ (with .claude/skills and .pi/skills
-    symlinked to it) and kept current like any managed code."""
+    Stamped into the target's .agents/skills/ (with per-skill symlinks from
+    .claude/skills/ and .pi/skills/) and kept current like any managed code."""
     return source.parent / "skills"
 
 
@@ -107,8 +107,8 @@ def target_rel(source: Path, f: Path) -> str:
       engine/skills/atelier/SKILL.md  -> .agents/skills/atelier/SKILL.md
 
     Skills land at the vendor-neutral .agents/skills/ (a first-class path for both
-    Codex and the emerging cross-agent standard); .claude/skills and .pi/skills are
-    symlinked to it by _ensure_agent_skill_symlinks so every harness finds one tree."""
+    Codex and the emerging cross-agent standard); _ensure_agent_skill_symlinks then
+    links each entry into .claude/skills/ and .pi/skills/ so every harness finds it."""
     skills = source_skills(source)
     try:
         return (Path(".agents/skills") / f.relative_to(skills)).as_posix()
@@ -147,32 +147,36 @@ def _copy_new(src: Path, dst: Path, wrote: list[str], skipped: list[str], target
     wrote.append(rel)
 
 
-# The vendor skills dirs that mirror the canonical .agents/skills so every harness
-# finds the same tree: Claude Code scans .claude/skills, PI scans .pi/skills. Codex
-# reads .agents/skills natively, so it needs no link. All three follow symlinks.
-SKILL_SYMLINKS = (".claude/skills", ".pi/skills")
-SKILL_SYMLINK_TARGET = "../.agents/skills"   # relative to each vendor dir
+# The canonical skills dir and the vendor dirs that mirror it so every harness finds
+# the same skills: Claude Code scans .claude/skills, PI scans .pi/skills. Codex reads
+# .agents/skills natively, so it needs no link. All three follow symlinks. We link per
+# skill ENTRY (not the whole dir), so the links drop in *alongside* any skills a target
+# already keeps in .claude/skills / .pi/skills instead of colliding with that dir.
+CANONICAL_SKILLS = ".agents/skills"
+SKILL_VENDOR_DIRS = (".claude/skills", ".pi/skills")
 
 
 def _ensure_agent_skill_symlinks(target: Path) -> list[str]:
-    """Point each vendor skills dir at the canonical .agents/skills via a *relative*
-    symlink, so Claude Code and PI operators discover the stamped operator skill too.
-    Safe by construction: only ever creates a link where nothing (or an empty dir) is
-    — never over a real dir you populated with your own skills, and never over an
-    existing symlink (whatever it points at). Returns the links it created."""
+    """For each skill stamped under .agents/skills, drop a *relative* symlink into each
+    vendor dir (.claude/skills/<skill>, .pi/skills/<skill>) → the canonical entry, so
+    Claude Code and PI operators discover it. Per-entry by design: the links sit beside
+    whatever skills a target already keeps there; a name already taken (its own skill,
+    or a prior link) is left untouched, and only entries that actually exist under
+    .agents/skills are linked (never a dangling link). Returns the links it created."""
+    canonical = target / CANONICAL_SKILLS
+    if not canonical.is_dir():
+        return []
     created: list[str] = []
-    for rel in SKILL_SYMLINKS:
-        link = target / rel
-        if link.is_symlink():
-            continue                                # already a link (any target) - leave it
-        if link.exists():
-            if link.is_dir() and not any(link.iterdir()):
-                link.rmdir()                        # empty real dir → safe to replace
-            else:
-                continue                            # your own skills live here → leave it
-        link.parent.mkdir(parents=True, exist_ok=True)
-        link.symlink_to(SKILL_SYMLINK_TARGET)
-        created.append(rel)
+    for entry in sorted(canonical.iterdir()):
+        if not entry.is_dir():
+            continue                                # a skill is a dir (holds SKILL.md)
+        for vendor in SKILL_VENDOR_DIRS:
+            link = target / vendor / entry.name
+            if link.is_symlink() or link.exists():
+                continue                            # name taken (link or your own skill) - leave it
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(Path("../..", CANONICAL_SKILLS, entry.name), target_is_directory=True)
+            created.append(f"{vendor}/{entry.name}")
     return created
 
 
@@ -207,7 +211,7 @@ def install(target: Path, source: Path) -> dict:
         _copy_new(f, target / rel, wrote, skipped, target)
         stamped[rel] = sha256_file(f)      # fresh install: stamped == source content
 
-    # 1b. Cross-agent discovery: link .claude/skills + .pi/skills → .agents/skills.
+    # 1b. Cross-agent discovery: link each stamped skill into .claude/skills + .pi/skills.
     wrote += _ensure_agent_skill_symlinks(target)
 
     # 2. USER data stamped ONCE (never in the manifest): prompts (live) + starters.
