@@ -18,6 +18,10 @@ dependencies = [
     "pyyaml",
     "python-dotenv",
     "claude-agent-sdk",
+    # runner.py/console.py import rich (the ADW scripts declare it inline); the
+    # dev harness needs it too so the fan-out + console concurrency tests can
+    # import the real modules.
+    "rich",
 ]
 
 [tool.pytest.ini_options]
