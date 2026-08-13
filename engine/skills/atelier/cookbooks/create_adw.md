@@ -109,6 +109,46 @@ if __name__ == "__main__":
 - **Stay thin** — sequencing and acceptance only; real logic goes in `adw_modules/` (`update_modules.md`).
 - **Committing is a code phase, and it needs a fallback.** `PlanOutput`, `BuildOutput`, and `DocumentOutput` each carry a `commit_message` the agent writes **for its own work product** — the spec, the code, the write-up. It defaults to empty, so always `envelope.commit_message or <fallback>`, and commit each product with the message of the agent that made it (`adw_simple_sdlc.py` commits three times and never crosses them). `git_helper.commit_all(message)` stages everything, commits, and returns the short sha; it raises a clear error when the cwd isn't a git repo or nothing changed, and that raise fails the phase.
 
+## Concurrent phases - `run.fan_out()`
+
+The default is sequential: `run.phase()` runs one phase, and any exception inside
+it finalizes the WHOLE run (right for a linear chain). When you need N **independent**
+agent phases at once - an ensemble of blind reviewers, parallel scouts - use
+`run.fan_out()` instead:
+
+```python
+branches = [
+    (PhaseParams(name=f"review_{name}", kind="agent", owner=name,
+                 description="Rule on every requirement against the code on disk"),
+     lambda ph, name=name: ph.call(AgentCall(output_type=ReviewOutput, prompt=prompt,
+                                              previous=previous, gates=REVIEW_GATES)))
+    for name in ["pr_reviewer_1", "pr_reviewer_2", "pr_reviewer_3"]
+]
+results = run.fan_out(branches)                 # each branch in its own thread
+reviews = [r.value for r in results if r.ok]    # BranchResult: .ok / .value / .error
+```
+
+Rules that make it correct:
+- **Threads, not asyncio** - the Claude SDK runs `asyncio.run()` inside each call,
+  so each branch needs its own event loop (an OS thread). `fan_out` handles that.
+- **A branch failure is a RESULT, not a teardown.** A raising branch becomes a
+  failed phase + `BranchResult(error=…)`; it does **not** call `session_finish` or
+  abort its siblings. **You** rule on the collected results at `run.finish()`
+  (e.g. decline only when zero survived).
+- **Independence is by identity.** Give each branch a **distinct** `owner` (agent
+  name) so it gets its own blind coding-agent session + `agent_sessions` row. N
+  copies of one name would share (and overwrite) one session.
+- **Per-identity artifacts.** Prompts several parallel identities share must write
+  to a per-name file - the reviewer prompt uses `review-{{agent_name}}.md`
+  (the `{{agent_name}}` template var is the invoking agent's name) so concurrent
+  writers never clobber one shared path.
+- The synthesizer/barrier phase after the fan-out is a **normal sequential
+  `run.phase()`** - hand it the branch envelopes (packed into its prompt) and let
+  it consolidate.
+
+Exemplars: `adw_ensemble_review.py` (review-only) and `adw_build_ensemble_review.py`
+(build → fan-out review → synthesize → bounded revise).
+
 ## Before you ship it
 
 1. `uv run adws/adw_<name>.py "a tiny real request"` — watch it go green end to end.

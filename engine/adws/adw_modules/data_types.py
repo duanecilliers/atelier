@@ -65,6 +65,13 @@ class Phase(BaseModel):
     error: Optional[str] = None
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
+    # Whether this phase's status gates the RUN outcome at finish(). True for
+    # ordinary sequential phases. fan_out sets it False on its branch phases: a
+    # failed reviewer branch is still recorded honestly as a failed PHASE, but the
+    # run outcome is the ADW's `accepted` decision (synthesize-from-survivors), not
+    # the branch's status. Not a db column - phase_upsert writes an explicit list,
+    # so this stays engine-internal and needs no seam mirror.
+    gating: bool = True
 
 
 # ── Envelopes (agent output types) ───────────────────────────────────────────

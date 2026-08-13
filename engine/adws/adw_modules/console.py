@@ -8,6 +8,9 @@ so a CI log reads exactly like a terminal.
 
 from __future__ import annotations
 
+import threading
+from contextlib import contextmanager
+
 from rich.console import Console as RichConsole
 from rich.markup import escape
 from rich.panel import Panel
@@ -30,16 +33,48 @@ class Console:
     def __init__(self, tracer, adw_id: str):
         self.tracer = tracer
         self.adw_id = adw_id
-        self.phase_id = ""          # current lane — log events attach to it
-        self.phase_name = ""
+        # Current lane - log events attach to it. Held per-thread so fan-out
+        # branches (each in its own thread) attribute their log events to their
+        # OWN phase; the main thread's sequential phases are unaffected. Only
+        # _emit reads these; only phase_started/phase_ended/phase_scope write them.
+        self._local = threading.local()
+        self._print_lock = threading.Lock()     # keep concurrent branch lines whole
         self.results: list[str] = []            # phase statuses, for the summary
         self._finished = False                  # the summary panel prints once
         self._out = RichConsole(highlight=False, soft_wrap=True)
 
+    # ── per-thread current-phase context ────────────────────────────────────
+    @property
+    def phase_id(self) -> str:
+        return getattr(self._local, "phase_id", "")
+
+    @phase_id.setter
+    def phase_id(self, value: str) -> None:
+        self._local.phase_id = value
+
+    @property
+    def phase_name(self) -> str:
+        return getattr(self._local, "phase_name", "")
+
+    @phase_name.setter
+    def phase_name(self, value: str) -> None:
+        self._local.phase_name = value
+
+    @contextmanager
+    def phase_scope(self, phase: Phase):
+        """Bind a phase to THIS thread for the duration - a fan-out branch wraps
+        its body in this so its console lines and log events carry its phase."""
+        self.phase_id, self.phase_name = phase.phase_id, phase.params.name
+        try:
+            yield
+        finally:
+            self.phase_id, self.phase_name = "", ""
+
     # ── the one helper: print AND trace, always together ────────────────────
     def _emit(self, markup: str, level: str = "info", renderable=None) -> None:
         text = Text.from_markup(markup)
-        self._out.print(renderable if renderable is not None else text)
+        with self._print_lock:
+            self._out.print(renderable if renderable is not None else text)
         self.tracer.event(EventRecord(
             adw_id=self.adw_id, phase_id=self.phase_id, type="log",
             name=self.phase_name or "console",

@@ -135,7 +135,7 @@ the same as blank.
 
 ### `Phase` — the persisted record
 
-`data_types.py:56-67`:
+`data_types.py:56-77`:
 
 ```python
 class Phase(BaseModel):
@@ -148,11 +148,21 @@ class Phase(BaseModel):
     error: Optional[str] = None
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
+    gating: bool = True            # does this phase's status decide the run outcome?
 ```
 
 `PhaseStatus = Literal["queued", "running", "success", "fail"]` (`data_types.py:17`). Note
 the default `status="fail"` — success must be *earned* by a clean exit from the context
 manager, not assumed.
+
+`gating` (default `True`) decides whether this phase's status counts toward the run's outcome
+at `finish()`. A sequential `run.phase(...)` is always gating. **`run.fan_out(...)` sets it
+`False` on its branch phases**, so a failed fan-out branch is recorded honestly as a failed
+*phase* but does not by itself fail the *run* - the ADW rules on the branch results and passes
+its verdict through `accepted` instead (see [`Run.fan_out`](#runfan_out-concurrent-agent-phases)
+and [§4](#4-runfinish--the-runs-single-finalization-call)). `gating` is deliberately **not** a
+column in the `phases` table (`phase_upsert` writes an explicit column list), so it stays
+engine-internal and needs no seam mirror.
 
 ### `Run.phase(params: PhaseParams)` — the one phase primitive
 
@@ -187,6 +197,62 @@ It yields a `PhaseHandle(self, phase)` (the `ph` in `with run.phase(...) as ph:`
 
 Wall time inside the `with` block is measured via `time.monotonic()` and passed to
 `console.phase_ended(phase, seconds)`.
+
+### `Run.fan_out(...)`: concurrent agent phases
+
+`runner.py:147-243`. Where `run.phase(...)` runs one phase sequentially, `run.fan_out(...)`
+runs **N agent phases at once**, each in its own OS thread. The signature:
+
+```python
+def fan_out(self, branches: list[tuple[PhaseParams, Callable[[PhaseHandle], Any]]]
+            ) -> list[BranchResult]
+```
+
+Each branch is a `(PhaseParams, fn)` pair - the phase to open and a callable that receives the
+`PhaseHandle` and does the work (typically `lambda ph: ph.call(AgentCall(...))`). It returns one
+`BranchResult` per branch, in input order:
+
+```python
+@dataclass
+class BranchResult:
+    phase: Phase
+    value: Any | None          # what the branch fn returned (e.g. a ReviewOutput)
+    error: BaseException | None
+    @property
+    def ok(self) -> bool: return self.error is None
+```
+
+**Why threads, not `asyncio`.** `agents.execute()` → `agent_cc.run()` drives the Claude SDK via
+`asyncio.run(...)` *inside each call*, which cannot be nested under one outer event loop. Each
+branch therefore needs its own thread (and its own event loop). This makes every shared write a
+thread-safety problem - solved by the thread-safe [Tracer](#5-the-tracer) (§5), a lock around
+`Run`'s shared counters (`add_usage`, `save_agent_map`), and the per-thread current-phase context
+in the `Console` (`console.py` moves `phase_id`/`phase_name` onto a `threading.local`).
+
+Three properties make it safe, and they are the contract an ADW relies on:
+
+1. **A branch failure is a *result*, not a teardown.** A branch that raises is recorded as a
+   failed phase and a `BranchResult(error=…)`; it does **not** call `session_finish` and does
+   **not** abort its siblings - the opposite of `run.phase()`, whose exception path finalizes the
+   whole session (that behavior is right for a linear chain, wrong mid-fan-out).
+2. **Branch phases are non-gating** (`Phase.gating=False`), so one failing branch does not fail
+   the run. The ADW inspects the returned `BranchResult`s and encodes its policy in the
+   `accepted` argument to `finish()`.
+3. **Exactly one `BranchResult` per branch.** Even an exception in the phase *lifecycle* (a
+   tracer/console failure, not the branch fn) is captured, so a branch is never silently dropped.
+
+Seqs and `self.phases` are allocated up front under `self._lock` (ordered, race-free); the method
+blocks on `join()` and only ever runs on the main run thread, so sequential `phase()` never
+overlaps it.
+
+**Precondition:** branches must be **read-only with respect to the git repo** (`writes: []`, like
+reviewers and scouts). Two branches whose agents write out of bounds would run
+`permissions.enforce`'s `git checkout` rollbacks concurrently and race the shared `.git/index.lock`.
+
+The canonical consumer is the ensemble review leg (`adw_modules/ensemble.py` - three independent
+reviewers fanned out, then a synthesizer). See
+[04-authoring-adws.md → Parallel fan-out](04-authoring-adws.md#parallel-fan-out) for the authoring
+pattern and the two ensemble ADWs.
 
 ### `PhaseHandle` — the API surface a phase author uses
 
@@ -268,14 +334,18 @@ phases like this.
 run.finish()` in `adw_scout.py:36`):
 
 ```python
-phases_ok = bool(self.phases) and all(p.status == "success" for p in self.phases)
+gating = [p for p in self.phases if p.gating]
+phases_ok = bool(self.phases) and all(p.status == "success" for p in gating)
 ok = phases_ok and accepted
 ```
 
 Two independent criteria:
 
-- **`phases_ok`** — every phase that ran must have ended `status == "success"`, and there
-  must be at least one phase.
+- **`phases_ok`** - every **gating** phase that ran must have ended `status == "success"`, and
+  there must be at least one phase. Fan-out branch phases are non-gating (see
+  [`Run.fan_out`](#runfan_out-concurrent-agent-phases)): a failed reviewer branch is recorded as a
+  failed phase but does not fail the run - the ADW decides via `accepted` (e.g. an ensemble that
+  synthesizes from the surviving reviews).
 - **`accepted`** — a separate boolean the ADW passes in: its own domain-level acceptance
   test (e.g. "did the test suite pass"), independent of whether phases mechanically
   completed.
@@ -298,10 +368,12 @@ lands in **JSONL and SQLite as it happens**; the JSONL files are the raw record,
 is the queryable mirror the cockpit polls; there is no push transport — the flow is always
 agents -> sqlite -> web UI. **WAL mode** lets the cockpit read while ADW processes write.
 
-`Tracer.__init__(db_path, events_jsonl)` (`tracer.py:104-114`):
+`Tracer.__init__(db_path, events_jsonl)` (`tracer.py:116-137`):
 
 ```python
-self.conn = sqlite3.connect(self.db_path, isolation_level=None)
+self.conn = sqlite3.connect(self.db_path, isolation_level=None,
+                            check_same_thread=False)
+self._lock = threading.RLock()          # serializes every writer
 self.conn.execute("PRAGMA journal_mode=WAL;")
 self.conn.execute("PRAGMA synchronous=NORMAL;")
 self.conn.execute("PRAGMA busy_timeout=5000;")
@@ -313,10 +385,19 @@ self._migrate()
 transactions — consistent with "as it happens" writing. Directories for both the db and the
 JSONL file are created via `ensure_dir` first.
 
+**Thread-safe by construction.** `Run.fan_out(...)` (§3) drives writes from many threads at
+once, so the single connection opens with `check_same_thread=False` and **every write method
+guards its body with `self._lock`** (a re-entrant `RLock`, because `session_finish` calls
+`processes_end_all` and both take it). One global lock is the right cost here: the parallelism
+that matters is the minutes-long agent I/O, not the microsecond sqlite writes. WAL keeps the
+cockpit's *separate* reader connection concurrent throughout. This is the enabling change the
+whole fan-out feature rests on.
+
 ### Write methods
 
-All of these execute directly against `self.conn` in autocommit mode. None are async, and
-there's no batching — every call is an individual autocommit `execute`.
+All of these execute against `self.conn` in autocommit mode, each **serialized by `self._lock`**
+(see above) so concurrent fan-out branches can't corrupt a write or interleave the JSONL append.
+None are async, and there's no batching - every call is an individual autocommit `execute`.
 
 | method | signature | behavior |
 | --- | --- | --- |

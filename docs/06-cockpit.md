@@ -35,16 +35,18 @@ roster read is scoped to that project's segment. The bare root `/` (`app/page.ts
 | `/[project]/skills` | `app/[project]/skills/page.tsx` | Read-only cookbook — one card per `adw_*.py` recipe, plus `<RecipeBuilder>` composer. `force-dynamic`. | `readRecipes()` (parses `.py` docstrings from disk, not db) | via child component, GET/POST `/api/adws` |
 | `/[project]/sandboxes` | `app/[project]/sandboxes/page.tsx` | Control-plane sandbox list — one card per sandbox (status/branch/tip/worktree/land-result), `<NewSandboxButton>`, and per-active-sandbox `<LandButton>` + `<ShutdownButton>`; "run here →" deep-links an active one into the Conductor. Live via `<LiveRefresh watch="sandboxes">`. `force-dynamic`. | `getDb().sandboxes()` | via child components, POST `/api/sandboxes`, `/api/sandboxes/[id]/land`, `/api/sandboxes/[id]/shutdown` |
 
-> **Note — the waterfall's multi-agent (multi-lane) path is untested against a real trace.**
+> **Note - the waterfall renders concurrency (fan-out) honestly.**
 > `<Waterfall>` groups phases into one lane per role: `engineer`, `code`, and one per distinct
-> `phases.owner`. A single-agent run (engineer + one agent) draws two lanes; a full
-> `adw_simple_sdlc` (plan → build → test → review) draws several stacked agent lanes. The layout
-> code — lane grouping, the reserved request-zone, and the sequential-shift-then-normalize block
-> packing — handles N lanes generically, **but every run in the local `sssf.db` to date is
-> engineer + a single agent**, so the multi-lane case has been exercised only through the geometry,
-> not eyeballed against a real multi-agent run. When you next kick a multi-agent ADW, sanity-check
-> the run-detail waterfall: lane order, no block overlap, and that each agent's model/context
-> label lines up with its lane.
+> `phases.owner`. A single-agent run draws two lanes; a full `adw_simple_sdlc` draws several
+> stacked agent lanes; an ensemble review (`run.fan_out`, one lane per `pr_reviewer_*`) draws lanes
+> that **overlap in time**. The block geometry lives in **`cockpit/lib/waterfall.ts`**
+> (`waterfallLayout`, unit-tested in `waterfall.test.ts`) - the reserved request-zone, the
+> min-block floor, and a **per-lane** shift-then-normalize pass. Per-lane (not global) is the key:
+> the anti-overlap shift only resolves collisions *within* a lane, so blocks in different lanes may
+> share the same x-range and concurrent phases stack at the same start instead of staircasing. A
+> sequential run is unchanged - one phase per lane per step, each at its true proportional position.
+> Verified against a real ensemble run (three reviewer lanes starting at the same instant, the
+> synthesizer lane after the barrier).
 
 ### API routes (`app/api/**/route.ts`)
 

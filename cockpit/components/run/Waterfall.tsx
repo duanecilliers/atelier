@@ -6,6 +6,7 @@ import { Label } from '@/components/terminal';
 import { ContextBar } from '@/components/run/ContextBar';
 import { ModelBadge } from '@/components/run/ModelBadge';
 import { axisTicks, duration, fmtOffset, tsMs } from '@/lib/format';
+import { waterfallLayout } from '@/lib/waterfall';
 import type { AgentSession, Event, Phase, PhaseKind } from '@/lib/types';
 
 /**
@@ -15,13 +16,13 @@ import type { AgentSession, Event, Phase, PhaseKind } from '@/lib/types';
  * its phase (?phase=…) to open the drill-down below; the selection is URL state
  * so it survives the live refresh and is shareable.
  *
- * Geometry ported from SSSF's SessionTrace.vue (reserved request-zone, min-block
- * floor, sequential-shift-then-normalize so a 200ms git commit stays readable and
- * nothing overlaps). Re-skinned to Monolith Signal: a block's color is its
- * STATUS (traffic-light rule), agent identity is a small swatch only, flat.
+ * Block geometry lives in lib/waterfall.ts (reserved request-zone, min-block
+ * floor, PER-LANE shift-then-normalize so a 200ms git commit stays readable and
+ * concurrent phases in different lanes share x instead of staircasing). Re-skinned
+ * to Monolith Signal: a block's color is its STATUS (traffic-light rule), agent
+ * identity is a small swatch only, flat.
  */
 
-const MIN_BLOCK_PCT = 4;
 const REQ_ZONE_PCT = 14;
 
 const KIND_LABEL: Record<PhaseKind, string> = { engineer: 'engineer', code: 'code', agent: 'agent' };
@@ -198,43 +199,11 @@ export function Waterfall({
     [postSpan, zone],
   );
 
-  // ── Block layout: sequential shift, then normalize back into the track ──────
-  const layout = useMemo<Record<string, { left: number; width: number }>>(() => {
-    const avail = 100 - zone - 0.4;
-    const timed = phases
-      .filter((p) => p.kind !== 'engineer' && Number.isFinite(tsMs(p.started_at)))
-      .map((p) => {
-        const start = tsMs(p.started_at);
-        let end = tsMs(p.ended_at);
-        if (!Number.isFinite(end)) end = p.status === 'running' ? nowMs : start;
-        return {
-          id: p.phase_id,
-          start,
-          left: ((start - originMs) / postSpan) * avail,
-          width: ((Math.max(end, start) - start) / postSpan) * avail,
-        };
-      })
-      .sort((a, b) => a.start - b.start);
-
-    let shift = 0;
-    let prevEdge = 0;
-    const rows: { id: string; left: number; width: number }[] = [];
-    for (const b of timed) {
-      let left = b.left + shift;
-      if (left < prevEdge) {
-        shift += prevEdge - left;
-        left = prevEdge;
-      }
-      const width = Math.max(b.width, MIN_BLOCK_PCT);
-      shift += width - b.width;
-      prevEdge = left + width;
-      rows.push({ id: b.id, left, width });
-    }
-    const scale = avail / Math.max(prevEdge, avail);
-    const out: Record<string, { left: number; width: number }> = {};
-    for (const r of rows) out[r.id] = { left: zone + r.left * scale, width: r.width * scale };
-    return out;
-  }, [phases, zone, originMs, postSpan, nowMs]);
+  // ── Block layout: per-lane shift, then normalize into the shared track ──────
+  const layout = useMemo(
+    () => waterfallLayout(phases, { zone, originMs, postSpan, nowMs }),
+    [phases, zone, originMs, postSpan, nowMs],
+  );
 
   // ── Tool-call ticks per phase ──────────────────────────────────────────────
   const toolTicks = useMemo(() => {
