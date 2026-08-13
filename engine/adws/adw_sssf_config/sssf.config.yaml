@@ -207,6 +207,60 @@ agents:
       - bash
       - write
 
+  # ── Ensemble review (parallel fan-out) ──────────────────────────────────────
+  # Three INDEPENDENT reviewers rule on the same change concurrently (run.fan_out),
+  # then a synthesizer consolidates their verdicts. Independence is by distinct
+  # identity: each name gets its own blind coding-agent session + agent_sessions
+  # row, so no reviewer sees another's context. They REUSE the single reviewer's
+  # prompt (one job, one prompt) but write to a per-name artifact
+  # (review-{{agent_name}}.md) so concurrent writes never clobber. Models are
+  # diversified on purpose - a real cross-model ensemble, not one model three times.
+  # Consumed by adw_ensemble_review.py and adw_build_ensemble_review.py.
+  - name: pr_reviewer_1
+    model: openai-codex/gpt-5.6-terra
+    thinking: high
+    color: "#fb7185"
+    purpose: Confirm that what was built is what was asked for; change nothing.
+    prompt_engineering:
+      system: engine/adws/adw_data/prompt_engineering/reviewer/system.md
+      user: engine/adws/adw_data/prompt_engineering/reviewer/user.md
+    writes: []
+    tools: [read, grep, find, ls, bash, write]
+
+  - name: pr_reviewer_2
+    coding_agent: claude_code          # anthropic/* forces claude_code anyway; explicit for clarity
+    model: anthropic/claude-opus-4-8   # a Claude reviewer via the local `claude` login (no key)
+    thinking: high
+    color: "#c084fc"
+    purpose: Confirm that what was built is what was asked for; change nothing.
+    prompt_engineering:
+      system: engine/adws/adw_data/prompt_engineering/reviewer/system.md
+      user: engine/adws/adw_data/prompt_engineering/reviewer/user.md
+    writes: []
+    tools: [read, grep, find, ls, bash, write]
+
+  - name: pr_reviewer_3
+    model: openai-codex/gpt-5.6-luna
+    thinking: high
+    color: "#f59e0b"
+    purpose: Confirm that what was built is what was asked for; change nothing.
+    prompt_engineering:
+      system: engine/adws/adw_data/prompt_engineering/reviewer/system.md
+      user: engine/adws/adw_data/prompt_engineering/reviewer/user.md
+    writes: []
+    tools: [read, grep, find, ls, bash, write]
+
+  - name: synthesizer
+    model: openai-codex/gpt-5.6-terra
+    thinking: high
+    color: "#34d399"
+    purpose: Consolidate the independent reviews into one verdict; change nothing.
+    prompt_engineering:
+      system: engine/adws/adw_data/prompt_engineering/synthesizer/system.md
+      user: engine/adws/adw_data/prompt_engineering/synthesizer/user.md
+    writes: []                     # reads the reviews it is handed; writes only its synthesis.md
+    tools: [read, grep, find, ls, bash, write]
+
   - name: documenter
     model: openai-codex/gpt-5.6-luna
     color: "#e879f9"

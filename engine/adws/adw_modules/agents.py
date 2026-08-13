@@ -307,6 +307,11 @@ def _run_instance(run, phase: Phase, agent: AgentConfig, call: AgentCall,
         "prompt": prompt_text,
         "previous_envelope": call.previous.model_dump_json(indent=2) if call.previous else "(none)",
         "context_handoff_dir": str(run.context_handoff_dir),
+        # The invoking agent's roster name. Lets a prompt shared by parallel
+        # identities (e.g. pr_reviewer_1/2/3 in a fan-out) write to a per-name
+        # artifact instead of clobbering one shared file. Additive: prompts that
+        # don't reference {{agent_name}} are unaffected.
+        "agent_name": agent.name,
         # Two roots, deliberately distinct. `context_handoff_dir` anchors at the
         # TRACE root (SSSF_TRACE_ROOT, the shared main repo) - it is observability.
         # `repo_root` is the EXECUTION root (cwd; the worktree under a sandbox run) -

@@ -350,6 +350,35 @@ class TestRunInstanceOverflow:
         assert called == ["cc"]
 
 
+class TestRenderVariables:
+    """Prompts a fan-out's parallel identities share must be able to write to a
+    per-name artifact, so the invoking agent's name reaches the template."""
+
+    def test_agent_name_is_a_render_variable(self, tmp_path, monkeypatch):
+        from adw_modules.data_types import AgentCall, GenericOutput, PiResult
+
+        seen: dict = {}
+        # Capture the variables dict handed to render (system is rendered first).
+        monkeypatch.setattr(agents.prompts, "render",
+                            lambda path, variables: seen.update(variables) or "")
+        monkeypatch.setattr(agents.prompts, "save", lambda *a, **k: None)
+        monkeypatch.setattr(agents, "project_guidance", lambda root: None)
+        monkeypatch.setattr(agents.permissions, "enforce", lambda *a, **k: [])
+        monkeypatch.setattr(agents, "_persist_envelope", lambda *a, **k: None)
+        monkeypatch.setattr(agents.agent_pi, "run",
+                            lambda request, **kw: PiResult(text='{"status": "success"}'))
+
+        run = TestRunInstanceOverflow._stub_run(self, tmp_path)
+        agent = AgentConfig(name="pr_reviewer_2", coding_agent="pi", model="openai-codex/x",
+                            prompt_engineering=PromptEngineering(system="s.md", user="u.md"))
+        call = AgentCall(output_type=GenericOutput, prompt="task")
+        phase = SimpleNamespace(phase_id="p", params=SimpleNamespace(retries=1), attempt=0)
+        agents._run_instance(run, phase, agent, call, tmp_path, "task", "sess-1",
+                             None, 1, tree_before=object())
+
+        assert seen.get("agent_name") == "pr_reviewer_2"
+
+
 class TestExtractJson:
     def test_fenced_block(self):
         assert agents._extract_json('pre\n```json\n{"a": 1}\n```\npost') == {"a": 1}
