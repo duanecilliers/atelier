@@ -38,6 +38,18 @@ from pathlib import Path
 import install  # sibling in the checkout; reuse the discovery + hashing contract
 
 
+def _prune_empty_tree(path: Path) -> None:
+    """Remove path and its empty descendant dirs, bottom-up. No-op if path is absent,
+    a symlink, or non-empty (only empty dirs are removed) — so a vendor skills dir you
+    filled with your own skills is never touched."""
+    if path.is_symlink() or not path.is_dir():
+        return
+    for child in sorted(path.iterdir(), reverse=True):
+        _prune_empty_tree(child)
+    if not any(path.iterdir()):
+        path.rmdir()
+
+
 def update(target: Path, source: Path) -> dict:
     manifest = install.read_manifest(target)
     if manifest is None:
@@ -91,10 +103,19 @@ def update(target: Path, source: Path) -> dict:
         else:
             kept.append(rel)                        # you edited it → keep, unmanage
 
+    # Migration + self-heal: pre-.agents stamps kept the skill at .claude/skills; the
+    # removal pass above unlinked those files, so drop the empty dirs they left, then
+    # (re)establish the per-skill vendor symlinks → .agents/skills. Safe for repos that
+    # already have the links (no-op) and for ones carrying your own skills (untouched).
+    for rel in install.SKILL_VENDOR_DIRS:
+        _prune_empty_tree(target / rel)
+    linked = install._ensure_agent_skill_symlinks(target)
+
     manifest = {"atelier_version": install.atelier_version(source), "stamped": new_stamped}
     install.write_manifest(target, manifest)
     return {"added": added, "updated": updated, "conflicts": conflicts,
-            "removed": removed, "kept": kept, "version": manifest["atelier_version"]}
+            "removed": removed, "kept": kept, "linked": linked,
+            "version": manifest["atelier_version"]}
 
 
 def main() -> int:
@@ -116,7 +137,10 @@ def main() -> int:
         print(f"  CONFLICT  {rel} — you edited it; new version at {rel}.atelier-new")
     for rel in r["kept"]:
         print(f"  KEPT      {rel} — removed upstream but you edited it")
-    if not any((r["updated"], r["added"], r["removed"], r["conflicts"], r["kept"])):
+    for rel in r["linked"]:
+        print(f"  LINKED    {rel} → .agents/skills (cross-agent skill discovery)")
+    if not any((r["updated"], r["added"], r["removed"], r["conflicts"],
+                r["kept"], r["linked"])):
         print("  already current — nothing to do")
     return 0
 

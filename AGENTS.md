@@ -165,22 +165,39 @@ still spawned through the one `spawn()`, byte-identical argv, with `cwd=<worktre
 
 ### The operator skill (`engine/skills/atelier/`) - stamped, MANAGED
 
-`engine/skills/atelier/` is the Claude Code **operator skill** for driving the factory (run /
+`engine/skills/atelier/` is the **operator skill** for driving the factory (run /
 create / update ADWs, tune the roster, observe runs) - one `SKILL.md` router plus cookbooks
-and references written for the native `adws/` layout. It is the **single source**: the Atelier
-checkout exposes it as `.claude/skills/atelier` (a symlink → `engine/skills/atelier`, so
-`/atelier` works here too), and `install.py` **stamps a copy into each target's
-`.claude/skills/atelier/`**. It is discovered like any managed code - `managed_files()` /
-`target_rel()` in `install.py` now scan `engine/skills/` and map it under `.claude/skills/` -
-so it lands in `.atelier/manifest.json` and `update.py` keeps its docs in lockstep with engine
-behavior (a hand-edited cookbook is parked as `<file>.atelier-new`, never clobbered). The skill
-is **layout-aware**: it detects the source repo (no top-level `adws/`, but `engine/adws/`) and
-translates paths. When engine behavior changes in a way the skill documents (backends, gates,
-config schema, observability), update `engine/skills/atelier/` in the same change - it is
-MANAGED for exactly this reason. Other agent harnesses (codex/cursor/pi) don't scan
-`.claude/skills/`; surface the skill to them via their own rules file pointing at
-`.claude/skills/atelier/SKILL.md`, **not** by copying it and **not** via `AGENTS.md`/`CLAUDE.md`
-(that leaks operator instructions into ADW coding agents through `project_guidance` injection).
+and references written for the native `adws/` layout. It is the **single source**, and it is
+**agent-agnostic**: Claude Code, Codex, and PI all read the same `SKILL.md` format (the "Agent
+Skills spec"), they just look in different dirs and each follows symlinks. So the stamp lands
+the real files at the vendor-neutral **`.agents/skills/atelier/`** (a first-class path Codex
+scans natively) and symlinks that **skill entry** into the other two harnesses' dirs -
+**`.claude/skills/atelier` → `../../.agents/skills/atelier`** (Claude Code) and the same into
+**`.pi/skills/`** (PI). One tree, three consumers. The links are *per skill entry*, not the whole
+dir, so they drop in alongside whatever skills a target already keeps in `.claude/skills` /
+`.pi/skills`. `install.py::_ensure_agent_skill_symlinks` creates them idempotently and
+conservatively (only links a name that is free, and only for entries that exist under
+`.agents/skills`); `update.py` self-heals them and migrates pre-`.agents` stamps (which kept the
+skill at `.claude/skills`).
+The Atelier checkout mirrors the same scheme (`.agents/skills/atelier` → `engine/skills/atelier`,
+with the two vendor symlinks), so `/atelier` and its Codex/PI equivalents work here too.
+
+It is discovered like any managed code - `managed_files()` / `target_rel()` in `install.py` scan
+`engine/skills/` and map it under `.agents/skills/` - so it lands in `.atelier/manifest.json` and
+`update.py` keeps its docs in lockstep with engine behavior (a hand-edited cookbook is parked as
+`<file>.atelier-new`, never clobbered). The skill is **layout-aware**: it detects the source repo
+(no top-level `adws/`, but `engine/adws/`) and translates paths. When engine behavior changes in
+a way the skill documents (backends, gates, config schema, observability), update
+`engine/skills/atelier/` in the same change - it is MANAGED for exactly this reason.
+
+**Keeping the operator skill out of ADW coding agents.** The operator skill is for a human
+driving the factory - it must never reach the coding agents the engine spawns. Two guards enforce
+this: `agent_cc.py` runs the Claude SDK in isolation (`setting_sources: []`), and `agent_pi.py`
+passes **`--no-skills`** (pi otherwise auto-discovers `.pi/skills` from cwd *and* the operator's
+`~/.pi/agent/skills`, inhaling the stamped skill into every build). Codex is never a backend, so
+it needs no engine-side guard. And **never** surface the skill via `AGENTS.md`/`CLAUDE.md` - that
+leaks operator instructions into ADW coding agents through `project_guidance` injection; the
+`.agents/skills` + symlink scheme is the supported route, no rules-file pointer needed.
 
 ## Writing conventions
 

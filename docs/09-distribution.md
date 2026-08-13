@@ -25,7 +25,8 @@ Four mechanisms, each a small script or file, that hold together:
 ┌──────────────▼───────────────────────────────────────────┐
 │  target repo (any project)                                │  MANAGED = in the manifest
 │  adws/**  ·  adws/adw_sssf_config/sssf.config.yaml        │  USER    = never in the manifest
-│  .claude/skills/atelier/**  ·  .atelier/manifest.json     │  RUNTIME = gitignored (sessions, db)
+│  .agents/skills/atelier/**  ·  .atelier/manifest.json     │  RUNTIME = gitignored (sessions, db)
+│  (.claude/skills/atelier, .pi/skills/atelier → canonical) │  cross-agent skill discovery
 └──────────────┬───────────────────────────────────────────┘
    registry     │  cockpit/atelier.projects.json lists each project = one repo root
 ┌──────────────▼───────────────────────────────────────────┐
@@ -53,7 +54,7 @@ updater ever touches it:
 
 | Bucket | What | In the manifest? | Updater behavior |
 | --- | --- | --- | --- |
-| **MANAGED** | Pure engine code — `adws/adw_modules/*.py`, `adws/adw_*.py`, and the operator skill `.claude/skills/atelier/**` | Yes (path → sha256) | Kept current; new files discovered and stamped automatically |
+| **MANAGED** | Pure engine code — `adws/adw_modules/*.py`, `adws/adw_*.py`, and the operator skill `.agents/skills/atelier/**` | Yes (path → sha256) | Kept current; new files discovered and stamped automatically |
 | **USER** | Your layer — `sssf.config.yaml`, `adw_data/prompt_engineering/**`, the `justfile`, `.env.sample`, **and anything you add** (custom ADWs, prompts, your own skills) | No | Never touched — invisible to updates by construction |
 | **RUNTIME** | `adw_data/sessions/`, `sssf.db*` | No (gitignored) | Never stamped |
 
@@ -77,8 +78,15 @@ there is no committed `templates/` copy that could drift from the real engine. W
   `managed_files()` *discovers* the set by scanning — every `adw_modules/**/*.py`, every top-level
   `adw_*.py` (including `adw_worker.py`), and every file under `engine/skills/`. `target_rel()`
   maps each to its native target path: `engine/adws/adw_modules/x.py → adws/adw_modules/x.py`, and
-  `engine/skills/atelier/SKILL.md → .claude/skills/atelier/SKILL.md`. Adding a module, ADW, or skill
+  `engine/skills/atelier/SKILL.md → .agents/skills/atelier/SKILL.md`. Adding a module, ADW, or skill
   file to the engine adds it to the managed set with no list to edit.
+- **Cross-agent skill symlinks** (not in the manifest): after copying, `_ensure_agent_skill_symlinks`
+  links each stamped skill *entry* into `.claude/skills/<skill>` and `.pi/skills/<skill>` → the
+  canonical `.agents/skills/<skill>`, so Claude Code, Codex (which reads `.agents/skills` natively),
+  and PI operators all discover it. Per-entry, so the links sit alongside whatever skills a target
+  already keeps in those dirs; a name that's already taken is left untouched. The engine keeps this
+  operator skill *out* of ADW coding agents: `agent_cc.py` isolates the Claude SDK
+  (`setting_sources: []`) and `agent_pi.py` passes `--no-skills`.
 - **USER data, stamped once** (never in the manifest): the live `prompt_engineering/` tree, plus
   the authored starters from `engine/dist/` — `sssf.config.starter.yaml → adws/adw_sssf_config/sssf.config.yaml`
   (native `adws/` layout, no `engine/` prefix), the `justfile`, and `env.sample → .env.sample`.
@@ -131,16 +139,29 @@ Your USER layer — roster, prompts, custom ADWs, your own skills — is not in 
 
 ## 4. The `/atelier` operator skill — MANAGED, single-source
 
-`engine/skills/atelier/` is the Claude Code **operator skill** for driving a stamped factory — one
-`SKILL.md` router plus cookbooks and references, written for the native `adws/` layout. It is the
-**single source**, consumed three ways:
+`engine/skills/atelier/` is the **operator skill** for driving a stamped factory — one `SKILL.md`
+router plus cookbooks and references, written for the native `adws/` layout. It is the **single
+source**, and it is **agent-agnostic**: Claude Code, Codex, and PI all read the same `SKILL.md`
+format (the "Agent Skills spec"); they only differ in which dir they scan, and each follows
+symlinks. So the skill lands once at the vendor-neutral **`.agents/skills/atelier/`** and is
+symlinked *per entry* into the other harnesses' dirs:
 
-- **The Atelier checkout** exposes it as `.claude/skills/atelier` via a symlink → `engine/skills/atelier`,
-  so `/atelier` works in this repo too, with zero drift.
-- **`install.py` stamps a copy** into each target's `.claude/skills/atelier/` (it's in the managed
-  scan), so a stamped repo can drive itself.
-- **`update.py` keeps it current** — a hand-edited cookbook is parked as `<file>.atelier-new`, never
-  clobbered, like any managed file.
+- **Canonical location** — `.agents/skills/atelier/`. Codex reads `.agents/skills` natively (a
+  first-class repo-scope path in its loader). `install.py::_ensure_agent_skill_symlinks` then links
+  the entry into each vendor dir — **`.claude/skills/atelier` → `../../.agents/skills/atelier`**
+  (Claude Code) and the same into **`.pi/skills/`** (PI). Per-entry, not the whole dir, so the links
+  sit alongside whatever skills a target already keeps there. One tree, three consumers.
+- **The Atelier checkout** mirrors the same scheme — `.agents/skills/atelier` → `engine/skills/atelier`,
+  with the two per-entry vendor symlinks — so `/atelier` (and its Codex/PI equivalents) works in this
+  repo too, with zero drift.
+- **`install.py` stamps** the real files into each target's `.agents/skills/atelier/` (it's in the
+  managed scan) and creates the symlinks, so a stamped repo can drive itself from any of the three.
+- **`update.py` keeps it current** and **self-heals** — it migrates pre-`.agents` stamps (which kept
+  the skill at `.claude/skills`), prunes the emptied old dirs, and (re)creates the per-entry vendor
+  symlinks. A hand-edited cookbook is parked as `<file>.atelier-new`, never clobbered.
+
+The symlink helper is **conservative**: it only ever links where nothing (or an empty dir) is, so a
+vendor skills dir you filled with your own skills is left untouched.
 
 The skill is **layout-aware**: if a top-level `adws/` is absent but `engine/adws/` is present, it
 detects the Atelier source repo and translates `adws/ → engine/adws/` throughout. So the *same*
@@ -150,11 +171,14 @@ detects the Atelier source repo and translates `adws/ → engine/adws/` througho
 and observability, a change to any of those must update `engine/skills/atelier/` in the same change
 — it is MANAGED for exactly this reason (see [AGENTS.md](../AGENTS.md)).
 
-> **Do not surface the skill to other harnesses by copying it, and never via `AGENTS.md`/`CLAUDE.md`.**
-> Those files are injected into `claude_code` coding agents as `project_guidance` (see
-> [03-agents-and-gates.md](03-agents-and-gates.md)); putting operator instructions there leaks them
-> into ADW agents. For codex/cursor/pi, point their own rules file at `.claude/skills/atelier/SKILL.md`
-> instead.
+> **The operator skill must stay out of ADW coding agents.** The engine spawns pi/claude_code/cursor
+> as coding-agent backends with `cwd` = the repo, and pi auto-discovers `.pi/skills` (and the
+> operator's `~/.pi/agent/skills`) unless stopped. Two guards enforce isolation: `agent_cc.py` runs
+> the Claude SDK with `setting_sources: []`, and `agent_pi.py` passes `--no-skills`. Also never
+> surface the skill via `AGENTS.md`/`CLAUDE.md` — those are injected into `claude_code` agents as
+> `project_guidance` (see [03-agents-and-gates.md](03-agents-and-gates.md)), which would leak
+> operator instructions into ADW agents. The `.agents/skills` + symlink scheme is the supported route;
+> no per-harness rules-file pointer is needed.
 
 ## 5. What made updates clean — the `quality.py` move
 

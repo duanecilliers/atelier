@@ -217,6 +217,31 @@ class ToolCallTracker:
         }
 
 
+def build_pi_command(request: PiRequest, provider: str, model_id: str) -> list[str]:
+    """The exact `pi` argv for one non-interactive turn. Pure + deterministic so the
+    seam is unit-testable. `--no-skills` is load-bearing: pi otherwise auto-discovers
+    skills from `.pi/skills` (project cwd) and `~/.pi/agent/skills` (user), which would
+    pull the stamped `.agents/skills` operator skill - and any of the operator's own
+    personal skills - into the ADW coding agent. This mirrors agent_cc.py's
+    `setting_sources: []`. Context files (AGENTS.md / CLAUDE.md) stay ON: that is the
+    intended project-guidance channel for pi (see agents.project_guidance)."""
+    cmd = [
+        PI_PATH, "-p", "--mode", "json",
+        "--provider", provider, "--model", model_id,
+        "--thinking", request.thinking,
+        "--session-id", request.session_id,
+        "--session-dir", request.session_dir,
+        "--system-prompt", request.system_prompt,
+        "--no-skills",
+    ]
+    if request.tools:
+        cmd += ["--tools", ",".join(request.tools)]
+    for extension in request.extensions:
+        cmd += ["-e", extension]
+    cmd.append(request.prompt)
+    return cmd
+
+
 def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
         on_spawn: Optional[Callable[[int], None]] = None,
         on_exit: Optional[Callable[[int], None]] = None) -> PiResult:
@@ -227,19 +252,7 @@ def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
     to hunt for in `ps` while the run sits there.
     """
     provider, model_id = resolve_model(request.model)
-    cmd = [
-        PI_PATH, "-p", "--mode", "json",
-        "--provider", provider, "--model", model_id,
-        "--thinking", request.thinking,
-        "--session-id", request.session_id,
-        "--session-dir", request.session_dir,
-        "--system-prompt", request.system_prompt,
-    ]
-    if request.tools:
-        cmd += ["--tools", ",".join(request.tools)]
-    for extension in request.extensions:
-        cmd += ["-e", extension]
-    cmd.append(request.prompt)
+    cmd = build_pi_command(request, provider, model_id)
 
     raw_path = Path(request.raw_output_path)
     raw_path.parent.mkdir(parents=True, exist_ok=True)

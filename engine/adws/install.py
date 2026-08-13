@@ -14,11 +14,14 @@ target at the native `adws/` layout (no `engine/` prefix):
 What lands, and why the buckets matter for updates (see update.py):
 
   MANAGED  — adws/adw_modules/*.py and adws/adw_*.py (pure engine code), plus the
-             operator skill .claude/skills/atelier/** (its docs must track engine
+             operator skill .agents/skills/atelier/** (its docs must track engine
              behavior). Recorded in .atelier/manifest.json (path -> sha256). The
              updater keeps these current; a new module, ADW, or skill file is
              DISCOVERED by scanning engine/adws/ and engine/skills/, so it stamps
-             automatically with no registry to edit.
+             automatically with no registry to edit. The skill lands at the
+             vendor-neutral .agents/skills/** (Codex reads it natively), and each skill
+             entry is symlinked into .claude/skills/ and .pi/skills/ so Claude Code and
+             PI operators discover the same tree — see _ensure_agent_skill_symlinks.
   USER     — adws/adw_sssf_config/sssf.config.yaml, adws/adw_data/prompt_engineering/**,
              the justfile, .env.sample. Stamped ONCE and never in the manifest,
              so the updater never touches them — and anything YOU add later
@@ -67,7 +70,8 @@ def source_adws() -> Path:
 
 def source_skills(source: Path) -> Path:
     """The live operator-skill payload: engine/skills, sibling to engine/adws.
-    Stamped into the target's .claude/skills/ and kept current like any managed code."""
+    Stamped into the target's .agents/skills/ (with per-skill symlinks from
+    .claude/skills/ and .pi/skills/) and kept current like any managed code."""
     return source.parent / "skills"
 
 
@@ -100,10 +104,14 @@ def managed_files(source: Path) -> list[Path]:
 def target_rel(source: Path, f: Path) -> str:
     """Map a live payload file to its target-relative path (native layout):
       engine/adws/adw_modules/x.py    -> adws/adw_modules/x.py
-      engine/skills/atelier/SKILL.md  -> .claude/skills/atelier/SKILL.md"""
+      engine/skills/atelier/SKILL.md  -> .agents/skills/atelier/SKILL.md
+
+    Skills land at the vendor-neutral .agents/skills/ (a first-class path for both
+    Codex and the emerging cross-agent standard); _ensure_agent_skill_symlinks then
+    links each entry into .claude/skills/ and .pi/skills/ so every harness finds it."""
     skills = source_skills(source)
     try:
-        return (Path(".claude/skills") / f.relative_to(skills)).as_posix()
+        return (Path(".agents/skills") / f.relative_to(skills)).as_posix()
     except ValueError:
         return (Path("adws") / f.relative_to(source)).as_posix()
 
@@ -139,6 +147,39 @@ def _copy_new(src: Path, dst: Path, wrote: list[str], skipped: list[str], target
     wrote.append(rel)
 
 
+# The canonical skills dir and the vendor dirs that mirror it so every harness finds
+# the same skills: Claude Code scans .claude/skills, PI scans .pi/skills. Codex reads
+# .agents/skills natively, so it needs no link. All three follow symlinks. We link per
+# skill ENTRY (not the whole dir), so the links drop in *alongside* any skills a target
+# already keeps in .claude/skills / .pi/skills instead of colliding with that dir.
+CANONICAL_SKILLS = ".agents/skills"
+SKILL_VENDOR_DIRS = (".claude/skills", ".pi/skills")
+
+
+def _ensure_agent_skill_symlinks(target: Path) -> list[str]:
+    """For each skill stamped under .agents/skills, drop a *relative* symlink into each
+    vendor dir (.claude/skills/<skill>, .pi/skills/<skill>) → the canonical entry, so
+    Claude Code and PI operators discover it. Per-entry by design: the links sit beside
+    whatever skills a target already keeps there; a name already taken (its own skill,
+    or a prior link) is left untouched, and only entries that actually exist under
+    .agents/skills are linked (never a dangling link). Returns the links it created."""
+    canonical = target / CANONICAL_SKILLS
+    if not canonical.is_dir():
+        return []
+    created: list[str] = []
+    for entry in sorted(canonical.iterdir()):
+        if not entry.is_dir():
+            continue                                # a skill is a dir (holds SKILL.md)
+        for vendor in SKILL_VENDOR_DIRS:
+            link = target / vendor / entry.name
+            if link.is_symlink() or link.exists():
+                continue                            # name taken (link or your own skill) - leave it
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(Path("../..", CANONICAL_SKILLS, entry.name), target_is_directory=True)
+            created.append(f"{vendor}/{entry.name}")
+    return created
+
+
 def _append_root_gitignore(target: Path, wrote: list[str]) -> None:
     gi = target / ".gitignore"
     existing = gi.read_text() if gi.is_file() else ""
@@ -169,6 +210,9 @@ def install(target: Path, source: Path) -> dict:
         rel = target_rel(source, f)
         _copy_new(f, target / rel, wrote, skipped, target)
         stamped[rel] = sha256_file(f)      # fresh install: stamped == source content
+
+    # 1b. Cross-agent discovery: link each stamped skill into .claude/skills + .pi/skills.
+    wrote += _ensure_agent_skill_symlinks(target)
 
     # 2. USER data stamped ONCE (never in the manifest): prompts (live) + starters.
     pe = source / "adw_data" / "prompt_engineering"
