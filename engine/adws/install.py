@@ -14,11 +14,14 @@ target at the native `adws/` layout (no `engine/` prefix):
 What lands, and why the buckets matter for updates (see update.py):
 
   MANAGED  — adws/adw_modules/*.py and adws/adw_*.py (pure engine code), plus the
-             operator skill .claude/skills/atelier/** (its docs must track engine
+             operator skill .agents/skills/atelier/** (its docs must track engine
              behavior). Recorded in .atelier/manifest.json (path -> sha256). The
              updater keeps these current; a new module, ADW, or skill file is
              DISCOVERED by scanning engine/adws/ and engine/skills/, so it stamps
-             automatically with no registry to edit.
+             automatically with no registry to edit. The skill lands at the
+             vendor-neutral .agents/skills/** (Codex reads it natively), with
+             .claude/skills and .pi/skills symlinked to it so Claude Code and PI
+             operators discover the same tree — see _ensure_agent_skill_symlinks.
   USER     — adws/adw_sssf_config/sssf.config.yaml, adws/adw_data/prompt_engineering/**,
              the justfile, .env.sample. Stamped ONCE and never in the manifest,
              so the updater never touches them — and anything YOU add later
@@ -67,7 +70,8 @@ def source_adws() -> Path:
 
 def source_skills(source: Path) -> Path:
     """The live operator-skill payload: engine/skills, sibling to engine/adws.
-    Stamped into the target's .claude/skills/ and kept current like any managed code."""
+    Stamped into the target's .agents/skills/ (with .claude/skills and .pi/skills
+    symlinked to it) and kept current like any managed code."""
     return source.parent / "skills"
 
 
@@ -100,10 +104,14 @@ def managed_files(source: Path) -> list[Path]:
 def target_rel(source: Path, f: Path) -> str:
     """Map a live payload file to its target-relative path (native layout):
       engine/adws/adw_modules/x.py    -> adws/adw_modules/x.py
-      engine/skills/atelier/SKILL.md  -> .claude/skills/atelier/SKILL.md"""
+      engine/skills/atelier/SKILL.md  -> .agents/skills/atelier/SKILL.md
+
+    Skills land at the vendor-neutral .agents/skills/ (a first-class path for both
+    Codex and the emerging cross-agent standard); .claude/skills and .pi/skills are
+    symlinked to it by _ensure_agent_skill_symlinks so every harness finds one tree."""
     skills = source_skills(source)
     try:
-        return (Path(".claude/skills") / f.relative_to(skills)).as_posix()
+        return (Path(".agents/skills") / f.relative_to(skills)).as_posix()
     except ValueError:
         return (Path("adws") / f.relative_to(source)).as_posix()
 
@@ -139,6 +147,35 @@ def _copy_new(src: Path, dst: Path, wrote: list[str], skipped: list[str], target
     wrote.append(rel)
 
 
+# The vendor skills dirs that mirror the canonical .agents/skills so every harness
+# finds the same tree: Claude Code scans .claude/skills, PI scans .pi/skills. Codex
+# reads .agents/skills natively, so it needs no link. All three follow symlinks.
+SKILL_SYMLINKS = (".claude/skills", ".pi/skills")
+SKILL_SYMLINK_TARGET = "../.agents/skills"   # relative to each vendor dir
+
+
+def _ensure_agent_skill_symlinks(target: Path) -> list[str]:
+    """Point each vendor skills dir at the canonical .agents/skills via a *relative*
+    symlink, so Claude Code and PI operators discover the stamped operator skill too.
+    Safe by construction: only ever creates a link where nothing (or an empty dir) is
+    — never over a real dir you populated with your own skills, and never over an
+    existing symlink (whatever it points at). Returns the links it created."""
+    created: list[str] = []
+    for rel in SKILL_SYMLINKS:
+        link = target / rel
+        if link.is_symlink():
+            continue                                # already a link (any target) - leave it
+        if link.exists():
+            if link.is_dir() and not any(link.iterdir()):
+                link.rmdir()                        # empty real dir → safe to replace
+            else:
+                continue                            # your own skills live here → leave it
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(SKILL_SYMLINK_TARGET)
+        created.append(rel)
+    return created
+
+
 def _append_root_gitignore(target: Path, wrote: list[str]) -> None:
     gi = target / ".gitignore"
     existing = gi.read_text() if gi.is_file() else ""
@@ -169,6 +206,9 @@ def install(target: Path, source: Path) -> dict:
         rel = target_rel(source, f)
         _copy_new(f, target / rel, wrote, skipped, target)
         stamped[rel] = sha256_file(f)      # fresh install: stamped == source content
+
+    # 1b. Cross-agent discovery: link .claude/skills + .pi/skills → .agents/skills.
+    wrote += _ensure_agent_skill_symlinks(target)
 
     # 2. USER data stamped ONCE (never in the manifest): prompts (live) + starters.
     pe = source / "adw_data" / "prompt_engineering"
