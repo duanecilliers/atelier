@@ -31,6 +31,8 @@ is chosen at the CLI rather than hard-coded into the phase chain.
 | `adw_plan_build.py` | Two-agent chain: planner → builder → commit. | engineer(request) → agent(`plan`) → agent(`build`) → code(`commit`, owner=`git`) | No | Commits everything unconditionally, using the builder's `commit_message` | `adw_plan_build.py "<prompt>" [--config …] [--adw-id …]` |
 | `adw_build_test.py` | Implement, then verify; suite failures loop back into the builder (bounded). | engineer(request) → agent(`build`) → [code(`test_i`) ↔ agent(`fix_i`)] × ≤3 | No | Writes via builder; **no commit phase at all** | `adw_build_test.py "<prompt>" [--config …] [--adw-id …]` |
 | `adw_build_review.py` | Implement, then confirm it's what was asked (spec-conformance, not tests). | engineer(request) → agent(`build`) → [agent(`review_i`) ↔ agent(`revise_i`)] × ≤3 | No | Writes via builder/reviewer's `writes:`; **no commit phase** | `adw_build_review.py "<prompt>" [--config …] [--adw-id …]` |
+| `adw_ensemble_review.py` | Review-only **ensemble**: three independent reviewers rule **in parallel**, then a synthesizer consolidates. Judges the working tree (`git diff`), no builder. | engineer(request) → **[agent(`review_pr_reviewer_1‖2‖3`)]** (fan-out) → agent(`synthesize`) | No | Read-only (all `writes: []`); **no commit phase** | `adw_ensemble_review.py "<prompt>" [--config …] [--adw-id …]` |
+| `adw_build_ensemble_review.py` | The ensemble twin of `adw_build_review`: build, then three reviewers **in parallel** + synthesize, bounded revise loop against the consolidated verdict. | engineer(request) → agent(`build`) → [ **[agent(`review_pr_reviewer_1‖2‖3`)]** (fan-out) → agent(`synthesize_i`) ↔ agent(`revise_i`) ] × ≤3 | No | Writes via builder; reviewers/synthesizer read-only; **no commit phase** | `adw_build_ensemble_review.py "<prompt>" [--config …] [--adw-id …]` |
 | `adw_plan_build_test.py` | The "full starter chain": plan → build → bounded test/fix loop → commit only if green. | engineer(request) → agent(`plan`) → agent(`build`) → [code(`test_i`) ↔ agent(`fix_i`)] × ≤3 → code(`commit`, gated on `test.passed`) | No | Commits **only if tests pass**; a red suite leaves the tree uncommitted | `adw_plan_build_test.py "<prompt>" [--config …] [--adw-id …]` |
 | `adw_plan_build_test_quality.py` | Plan → build → bounded verify+test loop (lint/typecheck/build/test as one block) → commit if verified. | engineer(request) → agent(`plan`) → agent(`build`) → [code(`verify_i`) ↔ agent(`fix_i`)] × ≤3 → code(`commit`, gated) | No | Commits only when `quality.run_quality` passes fully | `adw_plan_build_test_quality.py "<prompt>" [--config …] [--adw-id …]` |
 | `adw_simple_sdlc.py` | The full SDLC: plan → commit_plan → build → bounded test/fix → bounded review/revise → conditional retest → commit_build → changes → document → commit_docs. | engineer(request) → agent(`plan`) → code(`commit_plan`) → agent(`build`) → [code(`test_i`) ↔ agent(`fix_i`)] × ≤3 → [agent(`review_i`) ↔ agent(`revise_i`)] × ≤2 → code(`retest`, conditional) → code(`commit_build`) → code(`changes`) → agent(`document`) → code(`commit_docs`) — all gated on `verified` | No | Three separate commits (plan, build, docs), each carrying its own agent's `commit_message`; gated on suite-green **and** review-approved | `adw_simple_sdlc.py "<prompt>" [--config …] [--adw-id …]` |
@@ -172,6 +174,42 @@ to `finish(accepted=False, reason=...)` instead. `finish` internals live in
 - **`agents.validate(cfg, REQUIRED_AGENTS)` is the single gate on multi-agent composition**: it
   fails fast if any named agent is missing from the roster, uses an unsupported `coding_agent`,
   or has missing prompt files — before any phase opens.
+
+### Parallel fan-out
+
+Where the patterns above are sequential, `run.fan_out(...)` runs several **agent phases
+concurrently** (one OS thread each) and hands back a `BranchResult` per branch - see
+[02-engine-runtime.md → `Run.fan_out`](02-engine-runtime.md#runfan_out-concurrent-agent-phases)
+for the primitive and its guarantees. The authoring shape:
+
+```python
+branches = [(PhaseParams(name=f"review_{name}", kind="agent", owner=name, description=...),
+             lambda ph, call=call: ph.call(call))
+            for name in ["pr_reviewer_1", "pr_reviewer_2", "pr_reviewer_3"]]
+results = run.fan_out(branches)              # each branch in its own thread
+reviews = [r.value for r in results if r.ok] # BranchResult: .ok / .value / .error
+```
+
+Rules that make it correct:
+
+- **Independence is by identity.** Each branch's `owner` must be a **distinct** roster agent, so
+  it gets its own blind coding-agent session and `agent_sessions` row. N copies of one name would
+  share (and overwrite) one session.
+- **A branch failure is a result, not a teardown**, and branch phases are non-gating - one failing
+  reviewer does not fail the run. You rule on `results` and pass your verdict to `run.finish()`
+  (e.g. an ensemble declines only when *zero* reviewers survive).
+- **Read-only branches only.** Fan out agents with `writes: []` (reviewers, scouts). Repo-writing
+  branches would race the git index lock under concurrent write-boundary rollback.
+- **Per-identity artifacts.** A prompt shared by parallel identities must write to a per-name file;
+  the reviewer prompt uses `review-{{agent_name}}.md` (the `{{agent_name}}` template var is the
+  invoking agent's name). The barrier phase after the fan-out (the synthesizer) is a **normal
+  sequential `run.phase()`** that consolidates the branch envelopes.
+
+The reusable ensemble leg lives in **`adw_modules/ensemble.py`** (`review_branches`,
+`synthesis_prompt`, `ensemble_review`), so `adw_ensemble_review.py` and
+`adw_build_ensemble_review.py` stay thin. The operator-skill cookbook
+`engine/skills/atelier/cookbooks/create_adw.md` documents the same pattern for agents authoring
+ADWs in a stamped repo.
 
 ### Bounded loops
 

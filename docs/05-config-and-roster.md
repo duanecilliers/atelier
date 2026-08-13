@@ -52,7 +52,7 @@ default; `max_instances: 1` turns it off. Runtime detail in
 | `occupancy_threshold` | `0.8` | Fraction of the context window at which the valve hard-kills the run (only when the window is known) |
 | `max_instances` | `3` | Total builder instances before the phase fails loudly; `1` = off |
 
-### `agents:` — the live roster, 5 agents
+### `agents:` - the live roster, 9 agents
 
 | Agent | `coding_agent` | `model` | `writes` | Purpose |
 |---|---|---|---|---|
@@ -60,6 +60,10 @@ default; `max_instances: 1` turns it off. Runtime detail in
 | `builder` | `pi` (inherited) | `openai-codex/gpt-5.6-sol` | *(no key — unrestricted)* | Implement the plan exactly; report every changed file in the envelope |
 | `scout` | `claude_code` | `anthropic/claude-haiku-4-5` | `[]` | Find and report where things live; change nothing |
 | `reviewer` | `pi` (inherited) | `openai-codex/gpt-5.6-terra` | `[]` | Confirm that what was built is what was asked for; change nothing |
+| `pr_reviewer_1` | `pi` (inherited) | `openai-codex/gpt-5.6-terra` | `[]` | Ensemble reviewer #1 (reuses the `reviewer` prompt) |
+| `pr_reviewer_2` | `claude_code` | `anthropic/claude-opus-4-8` | `[]` | Ensemble reviewer #2 - a Claude reviewer via the SDK |
+| `pr_reviewer_3` | `pi` (inherited) | `openai-codex/gpt-5.6-luna` | `[]` | Ensemble reviewer #3 (reuses the `reviewer` prompt) |
+| `synthesizer` | `pi` (inherited) | `openai-codex/gpt-5.6-terra` | `[]` | Consolidate the independent reviews into one verdict; change nothing |
 | `documenter` | `pi` (inherited) | `openai-codex/gpt-5.6-luna` | `[app_docs/, docs/, "**/*.md", "*.md"]` | Write up the change from the diff; document only |
 
 Notes:
@@ -67,8 +71,19 @@ Notes:
   unrestricted, and it's the only agent whose `tools` list includes `edit`. It still
   cannot touch `defaults.protected_files` — the builder doesn't get to edit its own
   grader.
+- **The ensemble identities (`pr_reviewer_1/2/3` + `synthesizer`)** power the parallel
+  ensemble review ADWs (`adw_ensemble_review.py`, `adw_build_ensemble_review.py`). The three
+  reviewers **reuse the single `reviewer` prompt** (one job, one prompt) but are *distinct*
+  roster names on purpose: distinct identity → distinct blind coding-agent session, which is
+  what makes their reviews independent when run concurrently via `run.fan_out`. The models are
+  **diversified** (terra / claude-opus-4-8 / luna) for a genuine cross-model ensemble, not one
+  model three times. They write a **per-name** artifact (`review-{{agent_name}}.md`) so
+  concurrent reviewers never clobber one shared file. See
+  [04-authoring-adws.md → Parallel fan-out](04-authoring-adws.md#parallel-fan-out).
 - `planner` and `scout` run `claude_code` specifically to reach `anthropic/*` models;
-  `reviewer` and `documenter` inherit the default `pi` backend. See §5 for why.
+  `pr_reviewer_2` likewise (any `anthropic/*` model is force-routed to `claude_code`, §4);
+  `reviewer`, `documenter`, and the other ensemble agents inherit the default `pi` backend.
+  See §5 for why.
 - `planner` and `scout` both load `harness_engineering:
   [.../harness_engineering/subagents.ts]`, which registers the four `subagent_*` tools
   — those tool names must also appear in the agent's own `tools` list (§6).
