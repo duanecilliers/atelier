@@ -237,6 +237,10 @@ leaks operator instructions into ADW coding agents through `project_guidance` in
   --squash --delete-branch`; then annotate-tag the resulting `main` commit
   (`git tag -a vX.Y.Z -m "<one-line release summary>"`) and `git push origin vX.Y.Z`. Tagging is
   outward-facing - confirm first, same as merging.
+- **Every tag also gets a GitHub release** (`gh release create vX.Y.Z --title "vX.Y.Z"
+  --notes-file -`), published, never a draft. The notes are written for a reader who was not in
+  the conversation - what changed and why it matters, not a commit list - and close with the
+  `compare/v<prev>...vX.Y.Z` link. An untagged PR (docs-only, dev-infra) gets no release.
 
 ## Commit guidelines
 
