@@ -429,6 +429,60 @@ class TestExecutionRootNotice:
         assert "context_handoff_dir" in agents.execution_root_notice(tmp_path)
 
 
+class TestProjectChecksNotice:
+    """The `quality:` block is where a repo writes down how its checks are really
+    invoked, and it never reached an agent - so an agent asked to run tests guessed
+    an entrypoint, and in a project that wraps its toolchain the guess fails for
+    reasons unrelated to the code."""
+
+    def _cfg_with_quality(self, quality: dict):
+        from adw_modules.data_types import QualityCheckConfig, SSSFConfig
+        return SSSFConfig(agents=[], quality={name: QualityCheckConfig(argv=argv)
+                                              for name, argv in quality.items()})
+
+    def test_lists_every_configured_check_as_its_real_argv(self):
+        notice = agents.project_checks_notice(self._cfg_with_quality({
+            "test": ["vendor/bin/sail", "composer", "test", "--parallel"],
+            "lint": ["pnpm", "--dir", "cockpit", "lint"],
+        }))
+        assert "vendor/bin/sail composer test --parallel" in notice
+        assert "pnpm --dir cockpit lint" in notice
+        # Names label the commands, and config order is preserved.
+        assert notice.index("test") < notice.index("lint")
+
+    def test_no_quality_block_says_nothing(self):
+        # A repo that has not wired its checks gets no block at all, rather than an
+        # empty heading implying there is nothing to run.
+        assert agents.project_checks_notice(self._cfg_with_quality({})) is None
+
+    def test_notice_reaches_the_system_prompt(self, tmp_path, monkeypatch):
+        from adw_modules.data_types import AgentCall, GenericOutput, PiResult
+
+        saved: dict[str, str] = {}
+        monkeypatch.setattr(agents.prompts, "render", lambda *a, **k: "SYSTEM BODY")
+        monkeypatch.setattr(agents.prompts, "save",
+                            lambda d, name, text: saved.__setitem__(name, text))
+        monkeypatch.setattr(agents, "project_guidance", lambda root: None)
+        monkeypatch.setattr(agents.permissions, "enforce", lambda *a, **k: [])
+        monkeypatch.setattr(agents, "_persist_envelope", lambda *a, **k: None)
+        monkeypatch.setattr(agents.agent_pi, "run",
+                            lambda request, **kw: PiResult(text='{"status": "success"}'))
+
+        run = TestRunInstanceOverflow._stub_run(self, tmp_path)
+        run.cfg = self._cfg_with_quality({"test": ["vendor/bin/sail", "composer", "test"]})
+        agent = AgentConfig(name="reviewer", coding_agent="pi", model="openai-codex/x",
+                            prompt_engineering=PromptEngineering(system="s.md", user="u.md"))
+        call = AgentCall(output_type=GenericOutput, prompt="task")
+        phase = SimpleNamespace(phase_id="p", params=SimpleNamespace(retries=1), attempt=0)
+        agents._run_instance(run, phase, agent, call, tmp_path, "task", "sess-1",
+                             None, 1, tree_before=object())
+
+        system = saved["system.md"]
+        assert "vendor/bin/sail composer test" in system
+        # Before the execution-root notice, which stays the last word on which tree.
+        assert system.index("# Project checks") < system.index("# Execution root")
+
+
 class TestExtractJson:
     def test_fenced_block(self):
         assert agents._extract_json('pre\n```json\n{"a": 1}\n```\npost') == {"a": 1}
