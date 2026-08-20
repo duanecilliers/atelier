@@ -90,6 +90,17 @@ Re-prompting is backend-neutral: an agent call re-prompts within the agent's **l
 | `{{context_handoff_dir}}` | absolute path to this session's `context_handoff/` — the **trace** root (`SSSF_TRACE_ROOT`, the shared main repo under a sandbox run) |
 | `{{repo_root}}` | absolute path to the codebase being worked in — the **execution** root (cwd; the worktree under a sandbox run). Repo copies (`specs/`, `app_docs/`) must anchor here, not at `context_handoff_dir`, or a sandboxed run writes them into the wrong tree |
 
+**The execution root is also stated outright, in every agent's system prompt.** `agents.py`
+appends an "# Execution root" block (`execution_root_notice`, off `run.repo_root`) last, after the
+project guidance - so it applies to every agent and every ADW whether or not a prompt template
+references `{{repo_root}}`. Without it the only absolute path an agent held was
+`context_handoff_dir`, and agents generalised from it: a sandboxed planner did its whole recon in
+the main repo, reading the base branch instead of the worktree's. `cwd` does not save you - an
+agent that writes an absolute path never consults it. The notice carves out `context_handoff_dir`
+by name - it may sit outside the execution root and stays the agent's write target, used verbatim -
+so it does not fight the read-only agents' "handoff dir is your only write target" rule. Prompt
+authors still need the two-roots rule above for anything they anchor themselves.
+
 A `user.md` declares one h3 per incoming datum, then the task, then the output contract:
 
 ````markdown

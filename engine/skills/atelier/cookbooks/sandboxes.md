@@ -76,7 +76,10 @@ intent — no page ever spawns a process.
   (`/<project>/queue`). Enqueuing with a `sandbox_id` binds the run to that sandbox; the worker
   spawns it with `cwd=<worktree>` and `SSSF_TRACE_ROOT=REPO_ROOT`, so **its trace still lands in
   the shared `sssf.db`** (that env var is the one correctness fix — observability paths absolutize
-  against the trace root, execution paths follow `cwd`). A run enqueued against a gone/failed
+  against the trace root, execution paths follow `cwd`). Every agent in that run is also told
+  its execution root outright - `agents.py` appends an "# Execution root" block naming the
+  worktree to each system prompt, because `cwd` alone does not stop an agent that writes an
+  absolute path from working in the main repo. A run enqueued against a gone/failed
   sandbox is rejected at enqueue; one whose sandbox dies mid-wait is failed as orphaned.
 - **Create-and-run in one step** — the Conductor's **Sandbox** dropdown also offers **＋ new
   sandbox** (beside *local* and the attach list). Picking it shows the level toggle and, on Launch,
