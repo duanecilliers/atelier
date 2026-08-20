@@ -100,6 +100,13 @@ from this map in file order. Omitting a block skips it; an **empty or absent `qu
 nothing and says so** — the honest replacement for hardcoded fake-green echoes. The map key `test`
 is the one the deterministic test phase runs alone.
 
+The block has a **second consumer**: `agents.project_checks_notice` renders it into every agent's
+system prompt as a `# Project checks` section (`quality.py` is still the only thing that *runs*
+it). So an agent asked to settle a claim with a check uses the same entrypoint the gate does
+instead of guessing one - which matters in any project that wraps its toolchain in a container, a
+version manager, or a task runner. Nothing else to wire: write the invocation here and every agent
+in every ADW sees it. An absent block renders no section at all.
+
 ```yaml
 quality:
   typecheck: { argv: ["pnpm", "--dir", "cockpit", "typecheck"], area: frontend, operation: typecheck }

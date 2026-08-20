@@ -16,6 +16,7 @@ from adw_modules.data_types import (
     GateReport,
     PhaseParams,
     QualityCheckConfig,
+    ReviewOutput,
     SandboxConfig,
     SandboxProfile,
     SSSFConfig,
@@ -53,6 +54,34 @@ class TestQualityArgv:
     def test_blank_first_element_rejected(self):
         with pytest.raises(ValidationError):
             QualityCheckConfig(argv=["   "])
+
+
+class TestReviewCheckEvidence:
+    """An ensemble reviewer whose checks could not run rests on strictly less
+    evidence than one whose did, and that difference was invisible in the envelope
+    the synthesizer consolidates from."""
+
+    def test_defaults_claim_no_check_evidence(self):
+        # A reviewer that says nothing has shown no check evidence - the default
+        # must not read as "checks ran", or a silent reviewer outranks an honest one.
+        review = ReviewOutput(status="success")
+        assert review.checks_executed is False
+        assert review.checks_note == ""
+
+    def test_carries_what_ran_and_why_not(self):
+        ran = ReviewOutput(status="success", checks_executed=True,
+                           checks_note="test: 8 passed")
+        blind = ReviewOutput(status="success", checks_executed=False,
+                             checks_note="test could not reach the database")
+        assert ran.checks_executed and "8 passed" in ran.checks_note
+        assert not blind.checks_executed and "database" in blind.checks_note
+
+    def test_check_evidence_is_independent_of_the_verdict(self):
+        # Evidence, not verdict: a review that ran no checks can still approve, and
+        # one that ran them can still reject. Nothing couples the two fields.
+        assert ReviewOutput(status="success", approved=True).checks_executed is False
+        rejected = ReviewOutput(status="success", approved=False, checks_executed=True)
+        assert rejected.checks_executed is True
 
 
 class TestUsageBreakdown:

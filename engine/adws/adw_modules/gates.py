@@ -131,6 +131,20 @@ def verdict_consistent(envelope: EnvelopeBase, run) -> GateReport:
     report.check("rejection names a problem", approved or bool(blocking or unmet),
                  "verdict is supported" if approved or blocking or unmet
                  else "approved=false but no blocking item or unmet requirement was given")
+
+    # A claim of check evidence must name the evidence. `checks_executed` is the one
+    # field a synthesizer is told to weigh reviewers on - an unbacked `true` would
+    # buy a verdict extra authority for nothing, and outrank a truthful peer.
+    # Envelope types without the field read as false and pass untouched.
+    claimed = bool(getattr(envelope, "checks_executed", False))
+    note = str(getattr(envelope, "checks_note", "")).strip()
+    if claimed and note:
+        detail = "check evidence named in checks_note"
+    elif claimed:
+        detail = "checks_executed=true but checks_note is empty - name the check that ran"
+    else:
+        detail = "no check evidence claimed"
+    report.check("checks claim is backed", not (claimed and not note), detail)
     return report
 
 

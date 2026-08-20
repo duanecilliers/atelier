@@ -141,6 +141,16 @@ class ReviewOutput(EnvelopeBase):
     approved: bool = False
     findings: list[ReviewFinding] = Field(default_factory=list)
     blocking: list[str] = Field(default_factory=list)   # what must change before approval
+    # Did this reviewer actually run the project's checks? A reviewer that could
+    # not rests on strictly less evidence than one that did, and in an ensemble
+    # that difference is invisible unless the envelope carries it: one reviewer
+    # whose test command could not reach the project's database ruled blind for
+    # three rounds while its verdict carried a peer's weight. False is the honest
+    # default - a reviewer that says nothing has shown no check evidence.
+    # On a synthesizer's envelope the flag carries forward, not up: true when at
+    # least one consolidated reviewer ran a check. Synthesizers do not run them.
+    checks_executed: bool = False
+    checks_note: str = ""           # which checks ran, or why they could not
 
 
 class DocumentOutput(EnvelopeBase):

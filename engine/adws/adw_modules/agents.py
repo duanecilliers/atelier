@@ -10,6 +10,7 @@ disposes.
 from __future__ import annotations
 
 import json
+import shlex
 from pathlib import Path
 from typing import Optional
 
@@ -113,6 +114,44 @@ def execution_root_notice(repo_root: str | Path) -> str:
     to the worktree, which permissions.enforce rolls back as a breach with no
     feedback to the agent."""
     return _EXECUTION_ROOT_NOTICE.format(root=Path(repo_root))
+
+
+_PROJECT_CHECKS_NOTICE = """# Project checks
+
+This project's checks are the ones the verify gate runs. Their entrypoints are:
+
+{commands}
+
+Use these entrypoints verbatim when your task calls for running a check. Do not
+invent an invocation: a direct call bypasses whatever the project wraps its
+toolchain in (a container, a version manager, a task runner) and fails for reasons
+that have nothing to do with the code. Running them is not automatic - run one only
+if your task asks you to."""
+
+
+def project_checks_notice(cfg: SSSFConfig) -> str | None:
+    """The project's own `quality:` argv, handed to every agent. None when the
+    config declares no checks (nothing to say, so nothing is said).
+
+    The `quality:` block is the ONE place a repo writes down how its checks are
+    really invoked, and until now only quality.py read it - an agent asked to run
+    tests had to guess an entrypoint. In a project that wraps its toolchain the
+    guess fails for reasons unrelated to the code: an ensemble reviewer ran the
+    suite directly on the host instead of through the project's container wrapper,
+    could not reach the database, and reviewed blind while its peers ran the same
+    suite green. The gate's own argv is the answer, and it is already data.
+
+    Handed to every agent rather than to declared check-running phases: which
+    agents run a check is a property of the task, not of the roster, and an
+    unconditional block needs no ADW, roster, or prompt change in any stamped repo.
+    """
+    names = list(cfg.quality)
+    if not names:
+        return None
+    width = max(len(name) for name in names)
+    commands = "\n".join(f"    {name.ljust(width)}  {shlex.join(cfg.quality[name].argv)}"
+                         for name in names)
+    return _PROJECT_CHECKS_NOTICE.format(commands=commands)
 
 
 def resolve(cfg: SSSFConfig, name: str) -> AgentConfig:
@@ -368,6 +407,11 @@ def _run_instance(run, phase: Phase, agent: AgentConfig, call: AgentCall,
     guidance = project_guidance(run.repo_root)
     if guidance:
         system_text = f"{system_text}\n\n{guidance}"
+    # How this project really invokes its checks - the gate's own argv, so an agent
+    # asked to run one does not have to guess an entrypoint.
+    checks = project_checks_notice(run.cfg)
+    if checks:
+        system_text = f"{system_text}\n\n{checks}"
     # Last in the system prompt, after the guidance, so nothing following it can
     # imply a different tree.
     system_text = f"{system_text}\n\n{execution_root_notice(run.repo_root)}"

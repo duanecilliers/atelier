@@ -212,7 +212,7 @@ Every agent's final response is parsed against one `EnvelopeBase` subclass
 | `PlanOutput` | `commit_message` | subject is committing the plan spec file, not the implementation it describes |
 | `BuildOutput` | `changed_files`, `commit_message` | `commit_message` consumed by the git commit phase |
 | `ScoutOutput` | `findings: list[ScoutFinding]` | `ScoutFinding` = `file` (required), `note` |
-| `ReviewOutput` | `approved: bool`, `findings: list[ReviewFinding]`, `blocking: list[str]` | `ReviewFinding` = `requirement` (required), `met: bool` (required), `evidence` |
+| `ReviewOutput` | `approved: bool`, `findings: list[ReviewFinding]`, `blocking: list[str]`, `checks_executed: bool`, `checks_note` | `ReviewFinding` = `requirement` (required), `met: bool` (required), `evidence`. `checks_executed` is evidence, not verdict: it says whether this reviewer ran the project's checks, so an ensemble synthesizer can outrank a reviewer that did over one that could not. Default `false` - a reviewer that says nothing has shown no check evidence |
 | `DocumentOutput` | `document_path`, `documented_files`, `commit_message` | |
 | `ChangesOutput` | `base`, `changed_files`, `insertions`, `deletions`, `stat`, `diff_path` | built by **code**, not an agent |
 | `VerifyOutput` | `passed: bool`, `failures: list[str]` | built by **code**, not an agent |
@@ -241,7 +241,7 @@ what's mechanically checkable; plan/code **quality** is a reviewer's job, not a 
 | `files_non_empty` | every existing artifact file has nonzero size (skips missing ones — existence is `artifacts_exist`'s job) |
 | `json_parses` | every `.json`-suffixed artifact that exists parses via `json.loads` |
 | `diff_matches_claims` | every path in `envelope.changed_files` exists (no-op on envelope types without that field, e.g. `PlanOutput`) |
-| `verdict_consistent` | for `ReviewOutput`-shaped envelopes: approval must not ship `blocking` items or unmet findings; a rejection must name a problem. Checks the envelope's own internal consistency — never reads the diff |
+| `verdict_consistent` | for `ReviewOutput`-shaped envelopes: approval must not ship `blocking` items or unmet findings; a rejection must name a problem; and a `checks_executed: true` claim must name what ran in `checks_note`, since that flag is what a synthesizer weighs reviewers on. Checks the envelope's own internal consistency — never reads the diff |
 | `tests_pass(command)` | factory — returns a gate that shells out to `command` and checks `returncode == 0`; failure note includes the last 1000 chars of stdout+stderr |
 
 `tests_pass` is the one gate that shells out; it's simpler than the `quality.py` blocks (§7),

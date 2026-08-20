@@ -45,6 +45,8 @@ class ReviewOutput(EnvelopeBase):
     approved: bool = False              # the verdict; status is only "did the review run"
     findings: list[ReviewFinding] = []  # ReviewFinding: {requirement, met: bool, evidence}
     blocking: list[str] = []            # what must change before approval
+    checks_executed: bool = False       # did this reviewer run the project's checks?
+    checks_note: str = ""               # which ran, or why they could not
 
 class DocumentOutput(EnvelopeBase):
     document_path: str = ""             # the write-up's home in the repo
@@ -89,6 +91,17 @@ Re-prompting is backend-neutral: an agent call re-prompts within the agent's **l
 | `{{previous_envelope}}` | the upstream envelope JSON, from `AgentCall(previous=...)` |
 | `{{context_handoff_dir}}` | absolute path to this session's `context_handoff/` — the **trace** root (`SSSF_TRACE_ROOT`, the shared main repo under a sandbox run) |
 | `{{repo_root}}` | absolute path to the codebase being worked in — the **execution** root (cwd; the worktree under a sandbox run). Repo copies (`specs/`, `app_docs/`) must anchor here, not at `context_handoff_dir`, or a sandboxed run writes them into the wrong tree |
+
+**Every agent is also handed the project's own check commands.** `agents.project_checks_notice`
+renders the `quality:` block from `sssf.config.yaml` as a "# Project checks" section in the system
+prompt - the same argv the verify gate runs, name and all. Until this existed the `quality:` block
+was known only to `quality.py`, so an agent asked to run tests guessed an entrypoint; in a project
+that wraps its toolchain (a container, a version manager, a task runner) the guess fails for
+reasons that have nothing to do with the code - an ensemble reviewer ran a suite directly on the
+host, could not reach the database, and reviewed blind for three rounds while its peers ran the
+same suite green. No roster, ADW, or prompt change is needed to get it; a config with no
+`quality:` block gets no section at all. This is also why a reviewer's `checks_executed` is worth
+believing: it had the right commands to run.
 
 **The execution root is also stated outright, in every agent's system prompt.** `agents.py`
 appends an "# Execution root" block (`execution_root_notice`, off `run.repo_root`) last, after the
