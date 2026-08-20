@@ -38,6 +38,29 @@ def operator_env() -> dict[str, str]:
     return env
 
 
+def operator_env_overrides() -> dict[str, str]:
+    """operator_env(), shaped for a transport that MERGES instead of replacing.
+
+    Most spawn sites hand operator_env() straight to `env=` and get exactly the
+    dict they built. The Claude Agent SDK does not: it merges `options.env` over
+    a copy of os.environ, so a key operator_env() *removed* is not removed at all
+    - the inherited value simply survives, because no override mentions the key.
+    That half-applies the fix: PATH is corrected (the key is present) while
+    VIRTUAL_ENV comes back, a combination no other backend produces.
+
+    A merge cannot express a delete, so express the nearest thing it can: an
+    explicit blank for every key operator_env() dropped. Empty and unset are
+    equivalent to the tools that read VIRTUAL_ENV (uv, activate scripts, pip);
+    both mean "no active venv". Derived from the diff rather than named
+    literally, so this stays correct if operator_env() ever drops another key.
+    """
+    env = operator_env()
+    for key in os.environ:
+        if key not in env:
+            env[key] = ""
+    return env
+
+
 def trace_root() -> Path:
     """Where the observability sink (sssf.db, session dirs, JSONL) anchors.
 

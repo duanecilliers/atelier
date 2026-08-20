@@ -152,6 +152,12 @@ backend-agnostic — it doesn't know or care which one actually ran.
   unmodified.
 - `on_spawn`/`on_exit` are accepted for interface parity but never called — the SDK owns the
   `claude` subprocess and doesn't expose its pid.
+- Passes `env=utils.operator_env_overrides()`, so a CC agent's Bash resolves the operator's own
+  `python3`/`pip`/global CLIs like every other spawn site (`agent_pi`, `agent_cursor`,
+  `quality._run`) rather than `uv run`'s ephemeral venv. It is the **overrides** variant because
+  the SDK *merges* `options.env` over `os.environ` instead of replacing it, so a key
+  `operator_env()` popped would otherwise survive the merge untouched, half-applying the fix
+  (see the `utils` section in [`02-engine-runtime.md`](02-engine-runtime.md)).
 - Reuses `agent_pi.context_window("anthropic", model_id)` for the context ceiling, since Claude
   models share pi's model registry.
 
