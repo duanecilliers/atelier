@@ -26,6 +26,7 @@ from typing import Callable, Optional
 
 from . import agent_pi
 from .data_types import PiRequest, PiResult, UsageBreakdown
+from .utils import operator_env_overrides
 
 # pi tool name -> Claude Code tool name. Claude Code has no separate list tool
 # (Bash/Glob cover it); the subagent_* pi extension tools have no CC equivalent
@@ -135,6 +136,14 @@ async def _run_async(request: PiRequest, on_event: Optional[Callable[[dict], Non
         "permission_mode": "bypassPermissions",
         # Deterministic: no ambient CLAUDE.md / project skills leaking in.
         "setting_sources": [],
+        # The operator's own environment, same as every other spawn site: an
+        # agent's Bash must resolve the `python3`/`pip`/global CLIs the engineer
+        # gets, not the ADW's `uv run` venv. v0.8.0 made this sharper - every
+        # agent's system prompt now names the project's check commands, so a
+        # claude_code agent runs the verify gate's own argv and must resolve it
+        # the way the gate does. Overrides, not a replacement: the SDK merges
+        # this over os.environ. See utils.operator_env_overrides.
+        "env": operator_env_overrides(),
     }
     tools = _cc_tools(request.tools)
     if tools is not None:

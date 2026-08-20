@@ -195,7 +195,7 @@ Loaded via `python-dotenv`'s `load_dotenv()`, which picks up `.env` in the proce
 | `ENGINEER_NAME` | Label for the "engineer" lane/actor in the trace | `git config user.name`, then `$USER`, then literal `"engineer"` |
 | `SSSF_ADWS_DIR` | Overrides where a newly authored `adw_<name>.py` is written | `engine/adws/` |
 | `OPENROUTER_API_KEY`, `FIREWORKS_API_KEY`, `OPENAI_API_KEY` | Provider auth `pi` itself reads per `~/.pi/agent/models.json` — which one you need depends on the `provider/model-id` strings named in the roster's `model:` fields | none (set by hand if that provider is used) |
-| `VIRTUAL_ENV` / `PATH` | `operator_env()` **pops** `VIRTUAL_ENV` and strips its `bin/` from `PATH` so subprocesses (bash tool calls, git, etc.) see the operator's real global CLIs, not `uv run`'s ephemeral dependency venv | n/a |
+| `VIRTUAL_ENV` / `PATH` | `operator_env()` **pops** `VIRTUAL_ENV` and strips its `bin/` from `PATH` so subprocesses (bash tool calls, git, etc.) see the operator's real global CLIs, not `uv run`'s ephemeral dependency venv. All four spawn sites apply it: `quality._run`, `agent_pi`, `agent_cursor`, and (via `operator_env_overrides()`, since the SDK merges rather than replaces) `agent_cc` | n/a |
 
 No API key env var is required for the `claude_code` coding-agent backend — it authenticates via
 the local `claude` CLI's own login, not an API key.
