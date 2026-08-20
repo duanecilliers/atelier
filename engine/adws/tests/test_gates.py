@@ -38,6 +38,29 @@ class TestVerdictConsistent:
         r = gates.verdict_consistent(_review(False, blocking=["needs tests"]), run=None)
         assert r.passed
 
+    def test_unbacked_checks_claim_fails(self):
+        # checks_executed is what a synthesizer weighs reviewers on, so a `true`
+        # that names nothing would buy a verdict authority it did not earn.
+        env = ReviewOutput(status="success", approved=True, checks_executed=True)
+        r = gates.verdict_consistent(env, run=None)
+        assert not r.passed
+        assert any("checks_note is empty" in v for v in r.violations)
+
+    def test_named_checks_claim_passes(self):
+        env = ReviewOutput(status="success", approved=True, checks_executed=True,
+                           checks_note="test: 8 passed")
+        assert gates.verdict_consistent(env, run=None).passed
+
+    def test_claiming_nothing_is_fine(self):
+        # A reviewer that ran no checks is honest, not inconsistent.
+        assert gates.verdict_consistent(_review(True), run=None).passed
+
+    def test_envelope_without_the_fields_is_untouched(self):
+        # The gate is shape-based (getattr), so a type that has no checks fields
+        # must not pick up a checks violation - whatever else it is judged on.
+        r = gates.verdict_consistent(GenericOutput(status="success"), run=None)
+        assert not any("checks_note" in v for v in r.violations)
+
 
 class TestArtifactsExist:
     def test_missing_artifact_flagged(self, tmp_path):
