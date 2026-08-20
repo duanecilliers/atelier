@@ -379,6 +379,56 @@ class TestRenderVariables:
         assert seen.get("agent_name") == "pr_reviewer_2"
 
 
+class TestExecutionRootNotice:
+    """A sandboxed run's only absolute path is `context_handoff_dir`, which anchors
+    at the TRACE root (the shared main repo) - agents generalised from it and did
+    their recon there instead of the worktree. Every agent's system prompt must
+    state the execution root outright, and it must read off run.repo_root."""
+
+    def test_notice_is_appended_to_every_system_prompt(self, tmp_path, monkeypatch):
+        from adw_modules.data_types import AgentCall, GenericOutput, PiResult
+
+        saved: dict[str, str] = {}
+        monkeypatch.setattr(agents.prompts, "render", lambda *a, **k: "SYSTEM BODY")
+        monkeypatch.setattr(agents.prompts, "save",
+                            lambda d, name, text: saved.__setitem__(name, text))
+        monkeypatch.setattr(agents, "project_guidance", lambda root: "# Project guidance")
+        monkeypatch.setattr(agents.permissions, "enforce", lambda *a, **k: [])
+        monkeypatch.setattr(agents, "_persist_envelope", lambda *a, **k: None)
+        monkeypatch.setattr(agents.agent_pi, "run",
+                            lambda request, **kw: PiResult(text='{"status": "success"}'))
+
+        worktree = tmp_path / "worktree"
+        worktree.mkdir()
+        run = TestRunInstanceOverflow._stub_run(self, tmp_path)
+        run.repo_root = str(worktree)          # a sandbox run: execution root != trace root
+        agent = AgentConfig(name="builder", coding_agent="pi", model="openai-codex/x",
+                            prompt_engineering=PromptEngineering(system="s.md", user="u.md"))
+        call = AgentCall(output_type=GenericOutput, prompt="task")
+        phase = SimpleNamespace(phase_id="p", params=SimpleNamespace(retries=1), attempt=0)
+        agents._run_instance(run, phase, agent, call, tmp_path, "task", "sess-1",
+                             None, 1, tree_before=object())
+
+        system = saved["system.md"]
+        assert system.count("# Execution root") == 1
+        assert str(worktree) in system
+        # After the project guidance, which is after the agent's own system body.
+        assert system.index("SYSTEM BODY") < system.index("# Project guidance") \
+            < system.index("# Execution root")
+
+    def test_notice_states_the_root_given(self, tmp_path):
+        assert str(tmp_path) in agents.execution_root_notice(tmp_path)
+        assert str(tmp_path) in agents.execution_root_notice(str(tmp_path))
+
+    def test_notice_exempts_the_handoff_dir(self, tmp_path):
+        # The read-only agents (writes: []) are told context_handoff_dir is their
+        # ONLY write target, and under a sandbox it sits outside repo_root. Without
+        # an explicit carve-out this notice - appended last - argues them into
+        # writing to the worktree, which permissions.enforce rolls back as a breach
+        # with no feedback to the agent.
+        assert "context_handoff_dir" in agents.execution_root_notice(tmp_path)
+
+
 class TestExtractJson:
     def test_fenced_block(self):
         assert agents._extract_json('pre\n```json\n{"a": 1}\n```\npost') == {"a": 1}

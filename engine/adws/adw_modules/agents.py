@@ -83,6 +83,38 @@ def project_guidance(repo_root: str | Path) -> str | None:
     return None
 
 
+_EXECUTION_ROOT_NOTICE = """# Execution root
+
+The code you are working in - the one checkout you may read and edit - is:
+
+    {root}
+
+Resolve every code path there: use relative paths, or absolute paths under that
+root. Other checkouts of this project may exist elsewhere on this machine holding
+different branches; reading one gives you the wrong code, so never infer this root
+from some other absolute path you were handed.
+
+`context_handoff_dir` from your task prompt is the one exception. It is the shared
+trace sink, it may sit outside this root, and it stays your write target for
+findings and handoffs: use it verbatim, never rewrite it to sit under this root,
+and never read the location of the code off it."""
+
+
+def execution_root_notice(repo_root: str | Path) -> str:
+    """The execution root stated outright, appended to every agent's system prompt.
+
+    Without it the only absolute path an agent is handed is `context_handoff_dir`,
+    which anchors at the TRACE root - under a sandbox run, the shared main repo, not
+    the worktree. Agents generalise from it and do their recon in the main repo,
+    reading the base branch instead of the sandbox's. cwd alone does not fix this: an
+    agent that writes an absolute path never consults cwd. The handoff carve-out is
+    not cosmetic: the read-only agents (`writes: []`) are told the handoff dir is
+    their ONLY write target, so without it this notice would argue them into writing
+    to the worktree, which permissions.enforce rolls back as a breach with no
+    feedback to the agent."""
+    return _EXECUTION_ROOT_NOTICE.format(root=Path(repo_root))
+
+
 def resolve(cfg: SSSFConfig, name: str) -> AgentConfig:
     for agent in cfg.agents:
         if agent.name == name:
@@ -336,6 +368,9 @@ def _run_instance(run, phase: Phase, agent: AgentConfig, call: AgentCall,
     guidance = project_guidance(run.repo_root)
     if guidance:
         system_text = f"{system_text}\n\n{guidance}"
+    # Last in the system prompt, after the guidance, so nothing following it can
+    # imply a different tree.
+    system_text = f"{system_text}\n\n{execution_root_notice(run.repo_root)}"
     prompts.save(agent_dir / "prompts", "system.md", system_text)
     prompts.save(agent_dir / "prompts", "user.md", user_text)
 
